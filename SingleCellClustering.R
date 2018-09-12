@@ -188,7 +188,7 @@ cluster <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_p
 #selecting 100 genes from the same expression bin as each signature gene (see Tirosh et. al., Nature). The output of the function is a dataframe
 #of signature scores that may be used to annotate a seurat object as metadata.
 
-new.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projects/Glioma_scGenetics/resources/genesignatures/")
+gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projects/Glioma_scGenetics/resources/genesignatures/")
 { 
         #Binning all detected genes into 25 bins to identify control genes for each signature.
         genes_detected <- rownames(seurat_data@data)

@@ -1,5 +1,4 @@
 setwd("/Volumes/ahg_regevdata2/projects/Glioma_differentiation")
-source ("code/Functions.R")
 
 library(Seurat)
 library(dplyr)
@@ -31,17 +30,17 @@ tumor_data = CreateSeuratObject(raw.data = tumor_10x, min.cells = 3, min.genes =
 #Generate QC plots.
 mito_genes = grep(pattern = "^MT-", x = rownames(x = tumor_data@data), value = TRUE)
 percent_mito = Matrix::colSums(tumor_data@raw.data[mito_genes,
-                                               ])/Matrix::colSums(tumor_data@raw.data)
+                                                   ])/Matrix::colSums(tumor_data@raw.data)
 tumor_data = AddMetaData(object = tumor_data, metadata = percent_mito, col.name
-                     = "percent_mito")
+                         = "percent_mito")
 pdf(file = paste0(figures_path,"/QC.pdf"), height = 6, width = 6)
 VlnPlot(object = tumor_data, features.plot = c("nGene", "nUMI",
-                                          "percent_mito"), nCol = 3, size.title.use = 14)
+                                               "percent_mito"), nCol = 3, size.title.use = 14)
 dev.off()
 
 #Cell filtering.
 tumor_data <- FilterCells(object = tumor_data, subset.names = c("nGene", "percent_mito"),
-                     low.thresholds = c(2000, -Inf), high.thresholds = c(6000, 0.2))
+                          low.thresholds = c(2000, -Inf), high.thresholds = c(6000, 0.2))
 
 #Add in hashtags as metadata.
 hashtag_metadata = data.frame(Barcode = tumor_data@cell.names, stringsAsFactors = F)
@@ -52,9 +51,9 @@ timepoints = unique(hashtag_metadata$TimePoint)
 
 for (i in 1:length(timepoints))
 {
-        temp = hashtag_metadata$TimePoint == timepoints[i]
-        hashtag_metadata = cbind(hashtag_metadata, temp)
-        colnames(hashtag_metadata)[ncol(hashtag_metadata)] = timepoints[i]
+  temp = hashtag_metadata$TimePoint == timepoints[i]
+  hashtag_metadata = cbind(hashtag_metadata, temp)
+  colnames(hashtag_metadata)[ncol(hashtag_metadata)] = timepoints[i]
 }
 rownames(hashtag_metadata) = hashtag_metadata$Barcode
 hashtag_metadata = dplyr::select(hashtag_metadata, -Barcode, -TimePoint)
@@ -158,6 +157,8 @@ rownames(hashtag_metadata) = hashtag_metadata$Barcode
 tumor_data_timepoints = tumor_data
 tumor_data_timepoints = AddMetaData(tumor_data_timepoints, hashtag_metadata)
 tumor_data_timepoints = SetAllIdent(tumor_data_timepoints, "TimePoint")
+
+
 
 #Compare all time points to control.
 timepoints_to_compare = c("1H", "3H", "6H", "9H", "12H", "24H", "48H")

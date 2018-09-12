@@ -120,7 +120,7 @@ tpm.to.seurat = function(tpm, genetics, hkgenes = NULL, projectname = "Single Ce
 }
 
 init <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path,
-                    mincells = 3, mingenes = 400)
+                    mincells = 3, mingenes = 400, minHkgenes = 50)
 {
   
   # Mitochondrial genes
@@ -129,7 +129,7 @@ init <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path
   seurat_data <- AddMetaData(object = seurat_data, metadata = percent.mito, col.name = "percent.mito")
   
   # House keeping genes (list from Itay Tirosh)
-  hkgenes <- as.vector(hkgenes)
+  hkgenes <- as.vector(hkgenes$V1)
   hkgenes.found <- which(toupper(rownames(seurat_data@data)) %in% hkgenes)  # remove hkgenes that were not found
   n_expressed_hkgenes <- Matrix::colSums(seurat_data@data[hkgenes.found, ] > 0)
   seurat_data <- AddMetaData(object = seurat_data, metadata = n_expressed_hkgenes, col.name = "n.exp.hkgenes")
@@ -142,7 +142,7 @@ init <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path
   
   # Filtering.
   seurat_data <- FilterCells(object = seurat_data, subset.names = c("nGene", "n.exp.hkgenes"),
-                             low.thresholds = c(3000, 50), high.thresholds = c(Inf, Inf))
+                             low.thresholds = c(mingenes, minHkgenes), high.thresholds = c(Inf, Inf))
   
   # Normalization.
   seurat_data <- NormalizeData(object = seurat_data, normalization.method = "LogNormalize", scale.factor = 100000)

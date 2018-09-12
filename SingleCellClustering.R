@@ -151,8 +151,7 @@ init <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path
   return (seurat_data)
 }
 
-cluster <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path,
-                   mincells = 3, mingenes = 400) {
+cluster <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path) {
   
   # Find variable genes.
   seurat_data <- FindVariableGenes(seurat_data, mean.function = ExpMean, dispersion.function = LogVMR,
@@ -169,13 +168,13 @@ cluster <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_p
   seurat_data <- JackStraw(object = seurat_data, num.replicate = 100)
   
   #Output Jackstraw plot
-  JackStrawPlot(object = seurat_data, PCs = 1:12)
+  JackStrawPlot(object = seurat_data, PCs = 1:15)
   ggsave(paste0(figures_path, projectname, '_jackstraw.png'), width = 8, height = 8)
   
   PCElbowPlot(object = seurat_data)
   ggsave(paste0(figures_path, projectname, '_elbow.png'), width = 8, height = 8)
   
-  PCHeatmap(object = seurat_data, pc.use = 1:5, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+  PCHeatmap(object = seurat_data, pc.use = 1:15, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
   ggsave(paste0(figures_path, projectname, '_PCHeatMap.png'), width = 8, height = 8)
   
   return(seurat_data)

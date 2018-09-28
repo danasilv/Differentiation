@@ -6,23 +6,24 @@ library(Seurat)
 library(Matrix)
 library(stringr)
 library(DiagrammeR)
-library(fifer)
+#library(fifer)
 library(NMF)
-library(ComplexHeatmap)
+#library(ComplexHeatmap)
 library(RColorBrewer)
 library(colorRamps)
-library(circlize)
+#library(circlize)
 library(ggplot2)
 library(enrichR)
 library(cluster)
 library(tidyr)
-library(mygene)
+#library(mygene)
 library(dplyr)
 library(igraph)
 library(Rtsne)
 library(scales)
-library(biomaRt)
+#library(biomaRt)
 library(diptest)
+library(useful)
 
 
 #####################Load in dependencies#########################
@@ -42,7 +43,7 @@ gencode = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/re
 #INPUTS: tpm contains the raw data. genetics contains the mutation information from amplified primers. hkgenes is the list of 
 #housekeeping genes from Itay.
 
-tpm.to.seurat = function(tpm, genetics, hkgenes, projectname = "Single Cell", figures_path = "results/",
+tpm.to.seurat = function(tpm, genetics, hkgenes = NULL, projectname = "Single Cell", figures_path = "results/",
                          mincells = 3, mingenes = 400)
 {
         seurat_data <- CreateSeuratObject(raw.data = tpm, min.cells = mincells, min.genes = mingenes, project = projectname)
@@ -117,20 +118,88 @@ tpm.to.seurat = function(tpm, genetics, hkgenes, projectname = "Single Cell", fi
         ggsave(paste0(figures_path, projectname, ' jackstraw.png'), width = 8, height = 8)
         
         return(seurat_data)
+}
+
+init <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path,
+                    mincells = 3, mingenes = 400, minHkgenes = 50)
+{
+  
+  # Mitochondrial genes
+  mito_genes <- grep(pattern = "^mt-", x = rownames(x = seurat_data@data), value = TRUE, ignore.case = T)
+  percent.mito <- Matrix::colSums(seurat_data@raw.data[mito_genes, ]) / Matrix::colSums(seurat_data@raw.data)
+  seurat_data <- AddMetaData(object = seurat_data, metadata = percent.mito, col.name = "percent.mito")
+  
+  # House keeping genes (list from Itay Tirosh)
+  hkgenes <- as.vector(hkgenes$V1)
+  hkgenes.found <- which(toupper(rownames(seurat_data@data)) %in% hkgenes)  # remove hkgenes that were not found
+  n_expressed_hkgenes <- Matrix::colSums(seurat_data@data[hkgenes.found, ] > 0)
+  seurat_data <- AddMetaData(object = seurat_data, metadata = n_expressed_hkgenes, col.name = "n.exp.hkgenes")
+  
+  # Output plots for filtering.
+  VlnPlot(object = seurat_data, features.plot = c("nGene"))
+  ggsave(paste0(figures_path, projectname, "_nGene.png"), width = 10, height = 3)
+  VlnPlot(object = seurat_data, features.plot = c("n.exp.hkgenes"))
+  ggsave(paste0(figures_path, projectname, "_nexphkgenes.png"), width = 10, height = 3)
+  
+  # Filtering.
+  seurat_data <- FilterCells(object = seurat_data, subset.names = c("nGene", "n.exp.hkgenes"),
+                             low.thresholds = c(mingenes, minHkgenes), high.thresholds = c(Inf, Inf))
+  
+  # Normalization.
+  seurat_data <- NormalizeData(object = seurat_data, normalization.method = "LogNormalize", scale.factor = 100000)
+  
+  
+  return (seurat_data)
+}
+
+cluster <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_path) {
+  
+  # Find variable genes.
+  seurat_data <- FindVariableGenes(seurat_data, mean.function = ExpMean, dispersion.function = LogVMR,
+                                   x.low.cutoff = 0.1, x.high.cutoff = 7, y.cutoff = 1, do.plot = FALSE)
+  
+  
+  #Scaling data.
+  seurat_data <- ScaleData(seurat_data, do.center = TRUE, do.scale = FALSE)
+  
+  #PCA
+  seurat_data <- RunPCA(object = seurat_data, pc.genes = seurat_data@var.genes, do.print = TRUE, pcs.print = 1:15, genes.print = 5)
+  
+  #Run Jackstraw
+  seurat_data <- JackStraw(object = seurat_data, num.replicate = 100)
+  
+  #Output Jackstraw plot
+  JackStrawPlot(object = seurat_data, PCs = 1:15)
+  ggsave(paste0(figures_path, projectname, '_jackstraw.png'), width = 8, height = 8)
+  
+  PCElbowPlot(object = seurat_data)
+  ggsave(paste0(figures_path, projectname, '_elbow.png'), width = 8, height = 8)
+  
+  PCHeatmap(object = seurat_data, pc.use = 1:15, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+  ggsave(paste0(figures_path, projectname, '_PCHeatMap.png'), width = 8, height = 8)
+  
+  return(seurat_data)
 }       
+
+
 
 #This function takes as an argument a seurat object that has been filtered, and returns calculated scores for the new signatures
 #from GBM2.0, and the old Verhaak signatures. For control genes, we are binning all genes into 25 bins of expression levels, and randomly
 #selecting 100 genes from the same expression bin as each signature gene (see Tirosh et. al., Nature). The output of the function is a dataframe
 #of signature scores that may be used to annotate a seurat object as metadata.
 
-new.sigs = function(seurat_data)
+gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projects/Glioma_scGenetics/resources/genesignatures/")
 { 
         #Binning all detected genes into 25 bins to identify control genes for each signature.
         genes_detected <- rownames(seurat_data@data)
         aggregate_exprs = rowMeans(as.matrix(seurat_data@data))
-        control_bins = cut(aggregate_exprs, breaks = c(quantile(aggregate_exprs, probs = seq(0,1,by=0.04))),
-                           labels = 1:25, include.lowest=TRUE)
+        
+        # Kevin version: (somethomes it's mpossib;e to break the quantiles)
+        #control_bins = cut(aggregate_exprs, breaks = c(quantile(aggregate_exprs, probs = seq(0,1,by=0.04))),
+        #                   labels = 1:25, include.lowest=TRUE)
+        # Dana changed:
+        control_bins = cut(aggregate_exprs, breaks = c(seq(floor(min(aggregate_exprs)), ceiling(max(aggregate_exprs)), length.out = 25)),
+                           labels = 1:24, include.lowest=TRUE)
         control_bins = data.frame(genes = genes_detected, mean = aggregate_exprs, bin = control_bins, stringsAsFactors = FALSE)
         
         binned_genes = list()
@@ -138,11 +207,11 @@ new.sigs = function(seurat_data)
         {
                 binned_genes[[i]] <- rownames(control_bins)[control_bins$bin == 1]
         }
-        # TODO: update location of genes GBM2.0 signatures
+
         #A. Look at new stemness markers as defined by GBM2.0
-        ACvMes <- read.csv("~/Suva Lab/Dana Project 1/RESOURCES/Stem Cell ISH markers/ACvMES.csv", skip=1)
+        ACvMes <- read.csv(paste0(signature.dir,"ACvMES.csv"), skip=1)
         colnames(ACvMes)[3] <- "mes_ac"
-        NPCvOPC <- read.csv("~/Suva Lab/Dana Project 1/RESOURCES/Stem Cell ISH markers/NPCvOPC.csv", skip=1)
+        NPCvOPC <- read.csv(paste0(signature.dir,"NPCvOPC.csv"), skip=1)
         colnames(NPCvOPC)[3] <- "npc_opc"
         
         #reformatting. 
@@ -157,28 +226,13 @@ new.sigs = function(seurat_data)
         newsigs_mean <- list()
         for (i in 1:6) {newsigs_mean[[i]] <- rowMeans(newsigs_genes_exprs[[i]])}
         
-        #B. Look at Verhaak sugroup assignments. 
-        verhaak_files <- list.files("~/Suva Lab/Dana Project 1/RESOURCES/Verhaak Subgroup Signatures")
-        verhaak <- list()
-        for (i in 1:4){verhaak[[i]] <- read.table (paste0("~/Suva Lab/Dana Project 1/RESOURCES/Verhaak Subgroup Signatures/", verhaak_files[i]), skip = 2, stringsAsFactors = F)$V1}
-        
-        #keep genes that are detected.
-        for (i in 1:4) {verhaak[[i]] <- verhaak[[i]][verhaak[[i]] %in% genes_detected]}
-        
-        verhaak_genes_exprs <- list()
-        for (i in 1:4) {verhaak_genes_exprs[[i]] <- FetchData(seurat_data, verhaak[[i]])}
-        
-        verhaak_mean <- list()
-        for (i in 1:4) {verhaak_mean[[i]] <- rowMeans(verhaak_genes_exprs[[i]])}
-        
-        #Aggregate all the signatures together.
-        sigs = c(newsigs, verhaak)
-        sigs_means = c(newsigs_mean, verhaak_mean)
         
         #For each gene signature, obtain the control genes and calculate the gene signature for each cell.
-        for (i in 1:length(sigs))
+        for (i in 1:length(newsigs))
         {
-                temp = inner_join(data.frame(genes = as.character(sigs[[i]])), control_bins)
+                #temp = inner_join(data.frame(genes = as.character(newsigs[[i]])), control_bins)
+                # Dana: is this to choose just the genes in the signature? if so this can work: 
+                temp = control_bins[control_bins$genes %in% newsigs[[i]],]
                 #For each gene on the list, pick out 100 genes randomly from that bin.
                 temp_control_genes = vector()
                 for (j in 1:nrow(temp))
@@ -190,15 +244,16 @@ new.sigs = function(seurat_data)
                 temp_control_genes = FetchData(seurat_data, temp_control_genes)
                 control_genes_exprs = rowMeans(temp_control_genes)
                 # Subtract control gene expression from signature gene expression to get scores.
-                sigs_means[[i]] = sigs_means[[i]] - control_genes_exprs
+                newsigs_mean[[i]] = newsigs_mean[[i]] - control_genes_exprs
         }
         
         #format the dataframe for output
-        sigs_means = data.frame(sigs_means)
-        colnames(sigs_means) =  c(colnames(ACvMes), colnames(NPCvOPC), gsub(".txt", "", verhaak_files))
+        newsigs_mean = data.frame(newsigs_mean)
+        colnames(newsigs_mean) =  c(colnames(ACvMes), colnames(NPCvOPC))
         
-        return(sigs_means)
-        }
+        return(newsigs_mean)
+
+}
 
 ####################Single cell analysis via hierarchical clustering/NMF##############################
 #
@@ -376,15 +431,15 @@ tpm.expressed.genes = function(tpm, hc, k = 3, n_gene = 50)
 
 #This function takes as argument a filtered tpm matrix (from tpm.process, or after removing non-malignant cells), and then 
 #runs nmf to identify gene signatures. The output is a list containing gene names for each obtained signature.
-#Input: filtered tpm matrix.
+#Input: filtered tpm matrix. Sample identity vector.
 # n_gene_per_signature: the number of genes to return per signature
-tpm.to.nmf = function(tpm_filtered, n_gene_per_signature = 30)
+tpm.to.nmf = function(tpm_filtered, sample_ident, n_gene_per_signature = 30)
 {
         #convert negative values to 0, because NMF doesn't take negatives also we are more interested in positively expressed genes.
         tpm_filtered[tpm_filtered<0] <- 0
         
         #Get vector of unique sample IDs
-        sample = substr(colnames(tpm_filtered),1,6)
+        sample = sample_ident
         unique_samples = unique(sample)
         
         #convert data to list form.
@@ -399,7 +454,7 @@ tpm.to.nmf = function(tpm_filtered, n_gene_per_signature = 30)
         signatures = list()
         for (i in 1:length(unique_samples))
         {
-                print(paste0("Running NMF on Sample ", i))
+                print(paste0("Running NMF on Sample ", unique_samples[i]))
                 temp = nmf (tpm_filtered_listed[[i]],10)
                 w = basis(temp)
                 signatures [[i]] = apply(w, 2, function(x) head(rownames(w)[order(x, decreasing = TRUE)],n_gene_per_signature))
@@ -461,7 +516,7 @@ calc.signature.scores = function(tpm_filtered, nmf_signatures)
                 test = test - control_genes_exprs
                 signature_scores[[i]] <- test
         }
-        tpm_filtered = select(tpm_filtered, -gene)
+        tpm_filtered = dplyr::select(tpm_filtered, -gene)
         
         # Make a dataframe of all signature scores.
         signature_scores = data.frame(signature_scores)
@@ -522,7 +577,7 @@ calc.signature.scores.list = function(tpm_filtered, signatures)
                 test = test - control_genes_exprs
                 signature_scores[[i]] <- test
         }
-        tpm_filtered = select(tpm_filtered, -gene)
+        tpm_filtered = dplyr::select(tpm_filtered, -gene)
         
         # Make a dataframe of all signature scores.
         signature_scores = data.frame(signature_scores)
@@ -536,16 +591,16 @@ calc.signature.scores.list = function(tpm_filtered, signatures)
 #of signatures, for the purposes of identifying signatures to merge as meta-signatures. It outputs a clustered object of the signatures
 #and generates plots of the heatmap and hierarchical clustering. The purpose of this function is to assist in manually combining
 #signatures into meta-signatures using the create.metasignature function.
-cluster.signature.scores = function(nmf_signature_scores)
+cluster.signature.scores = function(nmf_signature_scores, plot_path)
 {
         signature_cluster = hclust(dist(t(nmf_signature_scores)))
         
         #Visualize.
-        pdf ("NMF signatures heatmap.pdf", width = 8, height = 8)
+        pdf (paste0(plot_path, "NMF signatures heatmap.pdf"), width = 8, height = 8)
         heatmap(as.matrix(nmf_signature_scores))
         dev.off()
         
-        pdf ("NMF Signature clusters.pdf", width = 8, height = 4)
+        pdf (paste0(plot_path, "NMF Signature clusters.pdf"), width = 8, height = 4)
         plot(signature_cluster)
         dev.off()
         
@@ -559,13 +614,13 @@ cluster.signature.scores = function(nmf_signature_scores)
 #meta-signature. It will write out the genes of that meta signature, the signatures that comprise that meta signature, and create a plot for that meta signature.
 #The output of the function is a data frame, containing the expression level of each cell for each gene of the meta-signature.
 
-create.metasignature = function(tpm_filtered, nmf_signatures, signature_scores, cluster_indices, cluster_name, n_metasignature_genes = 30)
+create.metasignature = function(tpm_filtered, plot_path, results_path, colours, nmf_signatures, signature_scores, cluster_indices, cluster_name, n_metasignature_genes = 30)
 { 
         #Aggregate all signatures together.
         signatures_aggregate = data.frame(nmf_signatures)
         colnames(signatures_aggregate) = paste0("Signature",1:ncol(signatures_aggregate))
         #write out a list of signature that comprise the meta signature.
-        write.csv(colnames(signatures_aggregate)[cluster_indices], paste0("MetaSignature ", cluster_name, " members.csv"))
+        write.csv(colnames(signatures_aggregate)[cluster_indices], paste0(results_path, "MetaSignature ", cluster_name, " members.csv"))
 
         meta_signature = as.character(unlist(as.list(signatures_aggregate[,cluster_indices])))
         meta_signature = unique(meta_signature)
@@ -578,22 +633,34 @@ create.metasignature = function(tpm_filtered, nmf_signatures, signature_scores, 
         #Sort and keep the top genes for the meta signature
         keep_meta_signature = sort(ranked, decreasing = TRUE) [1:n_metasignature_genes]
         #Write out the genes belonging to that meta signature.
-        write.csv(names(keep_meta_signature), paste0("MetaSignature ", cluster_name, " genes.csv"))
+        write.csv(names(keep_meta_signature), paste0(results_path, "MetaSignature ", cluster_name, " genes.csv"))
         
         to_plot = as.matrix(tpm_filtered[rownames(tpm_filtered) %in% names(keep_meta_signature),]) 
         to_plot = to_plot[,order(colSums(to_plot))]
+        
+        #Get sample identities, for plotting purposes
+        sample_ident = colnames(to_plot)
+        sample_ident = unlist(lapply(strsplit(sample_ident, "_"), function(x) x[1]))
+        
         keep_meta_signature = names(keep_meta_signature)
-     
-        plot = Heatmap(to_plot, 
+        
+        #Annotate correlation heatmap by Sample.
+        ha = rowAnnotation(df = data.frame(Sample = sample_ident), 
+                           show_annotation_name = TRUE,
+                           col = colours,
+                           annotation_name_gp = gpar(fontsize = 6),
+                           annotation_height = unit.c(unit(0.75, "cm"), unit(0.75, "cm")))
+        
+        plot = Heatmap(t(to_plot), 
         cluster_rows = F, 
         cluster_columns = F,
-        show_row_names = T,
-        show_column_names = F,
-        column_title = "Cells",
-        column_title_side = "bottom",
-        col = colorRamp2(seq(-1, 10, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299))))
-        pdf(paste0("NMF cluster ", cluster_name, ".pdf"), height = 4.5, width = 12)
-        print(plot)
+        show_row_names = F,
+        show_column_names = T,
+        row_title = "Cells",
+        col = colorRamp2(seq(-5, 10, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299))))
+        pdf(paste0(plot_path, "NMF cluster ", cluster_name, ".pdf"), height = 12, width = 7.5)
+        
+        print(plot + ha)
         dev.off()
         
         return(to_plot)
@@ -602,7 +669,7 @@ create.metasignature = function(tpm_filtered, nmf_signatures, signature_scores, 
 #The function takes as argument a list of meta-signatures (a list of outputs from create.metasignature). It outputs a data frame of GO Terms that can help
 #identify the cell types specific to each meta-signature.
 
-metasignature.go.terms = function(metasignatures, num_terms = 20)
+metasignature.go.terms = function(metasignatures, results_path, num_terms = 20)
 { 
         dbs <- c("GO_Biological_Process_2015")
         go_terms = list()
@@ -613,7 +680,7 @@ metasignature.go.terms = function(metasignatures, num_terms = 20)
 
         go_terms = data.frame(lapply(go_terms, function(x) x[[1]][1:num_terms,1]))
         colnames(go_terms) = paste0("MetaSignature", seq(1,length(metasignatures)))
-        write.csv(go_terms, "Go Terms.csv")
+        write.csv(go_terms, paste0(results_path, "Go Terms.csv"))
         return(go_terms)
 }
 

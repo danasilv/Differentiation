@@ -24,7 +24,7 @@ library(scales)
 #library(biomaRt)
 library(diptest)
 library(useful)
-
+library(purrr)
 
 #####################Load in dependencies#########################
 

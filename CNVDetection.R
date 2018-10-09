@@ -274,8 +274,7 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
         
         Chr = factor(Ecnv_smoothed_ref$Chr, levels = rev(unique(Ecnv_smoothed_ref$Chr)))
         Chrs = unique(Chr)
-        Samples = unique(sample_ident)
-        Samples = Samples[!Samples %in% c("Oligodendrocyte", "Macrophages")]
+        Samples = levels(sample_ident)
         
         for (i in 1:length(Samples))
         {
@@ -323,11 +322,8 @@ plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0)
 { 
         Chr = factor(Ecnv_smoothed_ref$Chr, levels = rev(unique(Ecnv_smoothed_ref$Chr)))
         Ecnv_smoothed_ref = dplyr::select(Ecnv_smoothed_ref, -Chr, -Gene, -Start, -End)
-        #Retrieve sample IDs.
-        Sample = sample_ident
-        Ecnv_smoothed_ref = Ecnv_smoothed_ref[,order(Sample)]
         
-        ha = HeatmapAnnotation (df = data.frame(Sample = Sample[order(Sample)]))
+        ha = HeatmapAnnotation (df = data.frame(Sample = sample_ident))
         ha1 = Heatmap(Ecnv_smoothed_ref, 
                       cluster_rows = F, 
                       cluster_columns = F,

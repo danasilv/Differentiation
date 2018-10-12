@@ -370,7 +370,7 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours
                 cluster_columns = hc, 
                 show_row_names = FALSE, 
                 show_column_names = FALSE, 
-                width = 3.5,
+                width = 6,
                 heatmap_legend_param = list(title_gp = gpar(fontsize = 10, fontface = "bold"), 
                                             labels_gp = gpar(fontsize = 8)))
         
@@ -391,11 +391,11 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours
                           column_names_gp = gpar(fontsize = 7),
                           width = 1
                           )
-                pdf(paste0(plot_path, "Correlation Heatmap.pdf"), width = 9, height = 7)
+                png(paste0(plot_path, "Correlation Heatmap.png"), width = 900, height = 700)
                 print(heatmap + heatmap2 + ha)
                 dev.off()
         }else{ 
-        pdf(paste0(plot_path, "Correlation Heatmap.pdf"), width = 9, height = 7)
+        png(paste0(plot_path, "Correlation Heatmap.png"), width = 900, height = 700)
         print(heatmap + ha)
         dev.off()
         }

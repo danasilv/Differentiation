@@ -207,18 +207,19 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
 #The oligo cells as baseline. "Both" means to use both cell types as baseline. "all" means return the whole data frame after correction, "malignant"
 #means return only the malignant cells after correction.
 
-baseline.correction = function(Ecnv_smoothed, malignant, oligo, method = c("oligo", "both"), output = c("all", "malignant"), noise_filter = 0.2)
+baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method = c("oligo", "both"), output = c("all", "malignant"), noise_filter = 0.2)
+#TODO. fix this. 
 { 
         #Remove the meta info.
         temp = Ecnv_smoothed[,c(1,2,3,4)]
         Ecnv_smoothed = Ecnv_smoothed[,-c(1,2,3,4)]
         
-        non_malignant = colnames(Ecnv_smoothed)[!colnames(Ecnv_smoothed) %in% malignant]
+        non_malignant = c(oligo, immune)
         baseline_oligo = Ecnv_smoothed[,colnames(Ecnv_smoothed) %in% oligo]
         baseline_oligo = apply(baseline_oligo, 1, mean)
         
         #for now, presume that non-malignant cells that are not oligos are immune.
-        baseline_immune = Ecnv_smoothed[,(colnames(Ecnv_smoothed) %in% non_malignant) & !(colnames(Ecnv_smoothed) %in% oligo)]
+        baseline_immune = Ecnv_smoothed[,colnames(Ecnv_smoothed) %in% immune]
         baseline_immune = apply(baseline_immune, 1, mean)
         combined_baselines = data.frame (Oligo = baseline_oligo, Immune = baseline_immune)
         
@@ -248,7 +249,10 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, method = c("olig
         }
         
         if (output == "all")
-        {       #Put back the meta info.
+        {       
+                #This step will remove cells that do not fall under any of these categories: malignant, oligo, or immune.
+                Ecnv_smoothed_ref = Ecnv_smoothed_ref[,colnames(Ecnv_smoothed_ref) %in% c(malignant,non_malignant)]
+                #Put back the meta info.
                 Ecnv_smoothed_ref = data.frame(temp, Ecnv_smoothed_ref)
                 return(Ecnv_smoothed_ref)
         }else if (output == "malignant"){

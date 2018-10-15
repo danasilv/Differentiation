@@ -345,7 +345,7 @@ tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene
 # colours - a vector of color names, its length is the number of unique samples in the tpm
 # marker genes - if specified will annotate the cells with marker genes in the bottom
 #TODO: how to check user input for marker genes?
-tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours,
+tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
                        marker_genes = 0)
 { 
         C = cor(tpm)
@@ -400,9 +400,16 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours
         dev.off()
         }
         
-        pdf(paste0(plot_path, "Hierarchical Clustering.pdf"), width = 7, height = 7)
-        hierarchical_clustering = plot(hc, labels = cutree(hc, k = k))
+        #Plot Clustering on its own
+        pdf(paste0(plot_path, "Hierarchical Clustering.pdf"), width = 14, height = 7)
+        hierarchical_clustering = plot(cut(as.dendrogram(hc),0.85)$upper, label = FALSE, height = 0.7, ylab = "Pearson Correlation",
+                                       xlab = FALSE)
         print(hierarchical_clustering)
+        dev.off()
+        
+        pdf(paste0(plot_path, "Hierarchical Clustering test.pdf"), width = 14, height = 7)
+     
+        print(hierarchical_clustering + heatmap2)
         dev.off()
         
         return(hc)

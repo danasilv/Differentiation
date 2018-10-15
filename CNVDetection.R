@@ -207,8 +207,7 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
 #The oligo cells as baseline. "Both" means to use both cell types as baseline. "all" means return the whole data frame after correction, "malignant"
 #means return only the malignant cells after correction.
 
-baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method = c("oligo", "both"), output = c("all", "malignant"), noise_filter = 0.2)
-#TODO. fix this. 
+baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method = c("mean", "both"), output = c("all", "malignant"))
 { 
         #Remove the meta info.
         temp = Ecnv_smoothed[,c(1,2,3,4)]
@@ -216,26 +215,33 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
         
         non_malignant = c(oligo, immune)
         baseline_oligo = Ecnv_smoothed[,colnames(Ecnv_smoothed) %in% oligo]
-        baseline_oligo = apply(baseline_oligo, 1, mean)
-        
-        #for now, presume that non-malignant cells that are not oligos are immune.
         baseline_immune = Ecnv_smoothed[,colnames(Ecnv_smoothed) %in% immune]
-        baseline_immune = apply(baseline_immune, 1, mean)
-        combined_baselines = data.frame (Oligo = baseline_oligo, Immune = baseline_immune)
         
-        baseline_max = apply(combined_baselines, 1, max)
-        baseline_min = apply(combined_baselines, 1, min)
+        if (method == "mean")
+        {
+                baseline = data.frame(cbind(baseline_oligo, baseline_immune))
+                baseline = apply(baseline, 1, mean)
+        }else if (method == "both")
+        {
+                baseline_oligo = apply(baseline_oligo, 1, mean)
+                baseline_immune = apply(baseline_immune, 1, mean)
+                combined_baselines = data.frame (Oligo = baseline_oligo, Immune = baseline_immune)
+                baseline_max = apply(combined_baselines, 1, max)
+                baseline_min = apply(combined_baselines, 1, min)
+        }
+        
         
         Ecnv_smoothed_ref = Ecnv_smoothed
         
-        if (method == "oligo")
+        if (method == "mean")
         {
-                print ("Using oligodendrocytes as controls")
-                Ecnv_smoothed_ref = Ecnv_smoothed - baseline_oligo
-                #apply noise filter.
-                Ecnv_smoothed_ref[Ecnv_smoothed_ref < noise_filter & Ecnv_smoothed_ref > -noise_filter] = 0
+                print ("Using mean of non-malignant cells as controls")
+                Ecnv_smoothed_ref = Ecnv_smoothed - baseline
+                #This is what will be returned. Noise filters will be applied in plot.cnv, for the purposes of plotting ONLY.
+                
         }else if(method == "both")
         {
+                #TODO. the check against baseline max and min needs to happen CONCURRENTLY.
                 print ("Using oligodendrocytes and immune cells as controls.")
                 for (i in 1:ncol(Ecnv_smoothed_ref)) {
                         Ecnv_smoothed_ref[ , i] = ifelse(Ecnv_smoothed_ref[ , i] > baseline_max + noise_filter, yes = Ecnv_smoothed_ref[ , i] - baseline_max, no = Ecnv_smoothed_ref[ , i])
@@ -250,7 +256,7 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
         
         if (output == "all")
         {       
-                #This step will remove cells that do not fall under any of these categories: malignant, oligo, or immune.
+                #This step will automatically remove cells that do not fall under any of these categories: malignant, oligo, or immune.
                 Ecnv_smoothed_ref = Ecnv_smoothed_ref[,colnames(Ecnv_smoothed_ref) %in% c(malignant,non_malignant)]
                 #Put back the meta info.
                 Ecnv_smoothed_ref = data.frame(temp, Ecnv_smoothed_ref)
@@ -273,6 +279,10 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
 sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
 {
         Ecnv_data_only = Ecnv_smoothed_ref[,-c(1:4)]
+        
+        #TEST: try applying a filter
+        Ecnv_data_only[ Ecnv_data_only < noise_filter &  Ecnv_data_only > -noise_filter] = 0
+        
         #this will be the output
         Ecnv_data_out = Ecnv_smoothed_ref[,c(1:4)]
         
@@ -288,13 +298,21 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
                 for (j in 1:length(Chrs))
                 {
                         temp_chr = temp[Chr == Chrs[j],]
+                        
                         #Check for bimodality, using Hartigan's dip test.
                         subclonality_check = apply(temp_chr, 2, function(x) mean(x))
-                        dip_test = dip(subclonality_check)
+                        dip_test = dip.test(subclonality_check)$p
+                        
                         #if bimodal, determine the cutoff point.
                         if (dip_test <= 0.05)
                         {
                                 clusters = kmeans(subclonality_check, 2)$cluster
+                                #If there is only a few cells in one of the clusters, just reset all cells to the same cluster.
+                                if ((sum(clusters == 1) < 3) | (sum(clusters == 2 ) < 3))
+                                {
+                                        clusters = rep(1, length(subclonality_check))   
+                                }
+                                
                                 temp_order[[j]] = clusters
                         }else{
                                 clusters = rep(1, length(subclonality_check))
@@ -305,6 +323,7 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
                 ordering = do.call(rbind, temp_order)
                 rownames(ordering) = Chrs
                 colnames(ordering) = colnames(temp_chr)
+                
                 #order the data for the current sample, starting from Chr1 and using successive chromosomes to break ties.
                 ordering = data.frame(t(ordering))
                 ordering = ordering[do.call(order, as.list(ordering)),]
@@ -322,12 +341,19 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
 #This function plots the results of the inferred CNV. The input is the output of baseline.correction, and the output of
 #match.exome.cnv. If genes_cn is not supplied, only the plot for infer.cnv will be generated. Otherwise, both plots will
 #(for infer.cnv and exome cnv) will be grouped together as the output.
-plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0)
+plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0, noise_filter = 0.2)
 { 
+        #apply noise filter.
+        Ecnv_smoothed_ref[Ecnv_smoothed_ref < noise_filter & Ecnv_smoothed_ref > -noise_filter] = 0
+        
+        #For the list of colours, add two new colours to the beginning for oligodendrocytes and immune cells.
+        colours$Sample = c(Oligodendrocyte = "#CCCCCC", Immune = "#757474", colours$Sample)
+        
+        
         Chr = factor(Ecnv_smoothed_ref$Chr, levels = rev(unique(Ecnv_smoothed_ref$Chr)))
         Ecnv_smoothed_ref = dplyr::select(Ecnv_smoothed_ref, -Chr, -Gene, -Start, -End)
         
-        ha = HeatmapAnnotation (df = data.frame(Sample = sample_ident))
+        ha = HeatmapAnnotation (df = data.frame(Sample = sample_ident), col = colours)
         ha1 = Heatmap(Ecnv_smoothed_ref, 
                       cluster_rows = F, 
                       cluster_columns = F,

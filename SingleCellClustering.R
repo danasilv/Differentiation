@@ -28,11 +28,10 @@ library(purrr)
 
 #####################Load in dependencies#########################
 
-hk = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/tirosh_house_keeping.txt", skip = 2)
-signatures = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
+signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
 signatures = as.list(signatures)
 signatures = lapply(signatures, function(x) x[!is.na(x)])
-gencode = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/gencode_v19_gene_pos.txt")
+gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 
 ####################Single cell analysis via Seurat############################
@@ -267,31 +266,22 @@ convert.merged.file = function(data)
 }
 
 
-#This function takes as argument a tpm matrix, a list of housekeeping genes, and a vector of Sample IDs (sample_ident).
+#This function takes as argument a tpm matrix and a vector of Sample IDs (sample_ident).
 #It will filters the data, and centers its expression levels.
-#The function also generates two QC plots. One for the number of genes expressed, one for expression of housekeeping genes.
+#The function also generates two QC plots. One for the number of genes expressed, one for aggregate expression of genes.
 #The output is a list containing filtered tpm matrix ($TPM) and the sample identities of the filtered tpm matrix ($sample_ident).
-tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, hk_cutoff = 2.5)
+tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, Ea_cutoff = 4)
 {
+        #the "temp" is for the second step of filtering (aggregate gene expression levels)
         temp = tpm
-        colnames(hkgenes) = "gene"
-        hkgenes$gene = as.character(hkgenes$gene)
         
         #Convert expression levels.
         tpm = log2(tpm/10 + 1)
         
-        #Calculate quality measures. Number of genes for which at least one read is mapped,
-        #and average expression level of a curated list of housekeeping genes. 
-        # Exclude cells with:
-        # less than nGene_cutoff_low genes, 
-        # average housekeeping expression level below hk_cutoff
-        # more than nGene_cutoff_high genes
+        #1. Filter cells based on the number of genes expressed.
         nGene = apply(tpm, 2, function(x) sum(x != 0))
-        tpm = data.frame(tpm, gene = as.character(rownames(tpm)), stringsAsFactors = FALSE)
-        hk_exprs = inner_join(hkgenes, tpm, by = "gene")
-        hk_exprs = colMeans(hk_exprs[,2:ncol(hk_exprs)])
         
-        #Generate QC plots.
+        #Generate QC plots
         nGene_toplot = data.frame(Sample = sample_ident, nGene = nGene)
         nGene_plot = ggplot(nGene_toplot, aes(factor(Sample), nGene)) + geom_violin() + geom_jitter()
         nGene_plot = nGene_plot + xlab("Sample") + ylab("Number of genes expressed")
@@ -301,31 +291,30 @@ tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene
         print(nGene_plot)
         ggsave(paste0(plot_path, "nGene QC.pdf"), height = 5.4, width = 9)
         
-        hk_toplot = data.frame(Sample = sample_ident, housekeeping = hk_exprs)
-        hk_plot = ggplot(hk_toplot, aes(factor(Sample), housekeeping)) + geom_violin() + geom_jitter()
-        hk_plot = hk_plot + xlab("Sample") + ylab("Mean expression of housekeeping genes")
-        hk_plot = hk_plot + theme(axis.text.x = element_text(angle = 60, hjust = 1))
-        hk_plot = hk_plot + geom_hline(yintercept = hk_cutoff, linetype = "dashed", color = "red")
-        print(hk_plot)
-        ggsave(paste0(plot_path, "hk QC.pdf"), height = 6.5, width = 9)
-        
-        #Determine which cells to keep.
-        keep = (nGene >= nGene_cutoff_low) & (nGene <= nGene_cutoff_high) & (hk_exprs >= hk_cutoff)
-        tpm = dplyr::select(tpm, -gene)
+        keep = (nGene >= nGene_cutoff_low) & (nGene <= nGene_cutoff_high)
         tpm = tpm[,keep]
         sample_ident = sample_ident[keep]
         
-        #Calculate aggregate expression of each gene, exclude genes with aggregate expression <4.
-        
-        temp = temp[,keep]
+        #2. Filter genes based on aggregate expression.
         Ea = apply(temp, 1, function(x) log2(mean(x)+1))
-        keep_gene = Ea >= 4
-        tpm = tpm[keep_gene,]
         
-        #Center expression levels.
+        #   Generate QC plot.
+        Ea_toplot = data.frame(Aggregate_Expression = Ea)
+        Ea_plot = ggplot(Ea_toplot, aes(Aggregate_Expression)) + geom_histogram(binwidth = 0.1)
+        Ea_plot = Ea_plot + xlab("Aggregate Gene Expression") + ylab("Count")
+        Ea_plot = Ea_plot + geom_vline(xintercept = Ea_cutoff, linetype = "dashed", color = "red")
+        print(Ea_plot)
+        ggsave(paste0(plot_path, "Ea QC.pdf"), height = 5.4, width = 9)
+        
+        keep_gene = Ea >= Ea_cutoff
+        tpm = tpm[keep_gene,]
+        rm(temp)
+        
+        #Center gene expression.
         mean_exprs = apply(tpm, 1, mean) 
         tpm = sweep(tpm, 1, mean_exprs, "-")
         
+        #Return results
         tpm_return = list()
         tpm_return[[1]] = tpm
         tpm_return[[2]] = sample_ident
@@ -337,14 +326,12 @@ tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene
 #This function will take as argument a filtered tpm matrix (from tpm.process), perform hierarchical clustering, and 
 #generate plots (heatmap of pearson correlations, and hierachical clustering) for exploratory analysis of the data.
 #if marker genes are supplied, a separate plot will be generated at the bottom of the heatmap.
-#It will return the clustering object.
+#It will return the hclust object.
 # Input: 
-# K - number of clusters
 # tpm - logged scale TPM
 # sample_ident - vector of sample names, for example MGH143
 # colours - a vector of color names, its length is the number of unique samples in the tpm
-# marker genes - if specified will annotate the cells with marker genes in the bottom
-#TODO: how to check user input for marker genes?
+# marker_genes - if specified will annotate the cells with marker genes in the bottom
 tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
                        marker_genes = 0)
 { 
@@ -357,6 +344,12 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
                                col = colours,
                                annotation_name_gp = gpar(fontsize = 8),
                                annotation_height = unit.c(unit(0.75, "cm"), unit(0.75, "cm")))
+        
+        #Remove marker genes that are not found in the data.
+        if (marker_genes[1] != 0)
+        {
+                marker_genes = intersect(marker_genes, rownames(tpm))
+        }
         
         #Generate heatmap
         heatmap = Heatmap(C, 
@@ -388,7 +381,7 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
                           cluster_columns = FALSE,
                           show_column_names = TRUE,
                           show_row_names = FALSE,
-                          column_names_gp = gpar(fontsize = 7),
+                          column_names_gp = gpar(fontsize = 12),
                           width = 1
                           )
                 png(paste0(plot_path, "Correlation Heatmap.png"), width = 900, height = 700)
@@ -402,15 +395,19 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
         
         #Plot Clustering on its own
         pdf(paste0(plot_path, "Hierarchical Clustering.pdf"), width = 14, height = 7)
-        hierarchical_clustering = plot(cut(as.dendrogram(hc),0.85)$upper, label = FALSE, height = 0.7, ylab = "Pearson Correlation",
+        hierarchical_clustering = plot(as.hclust(cut(as.dendrogram(hc),0.85)$upper), labels = FALSE, 
+                                                  ylab = "Pearson Correlation",
                                        xlab = FALSE)
         print(hierarchical_clustering)
         dev.off()
         
-        pdf(paste0(plot_path, "Hierarchical Clustering test.pdf"), width = 14, height = 7)
-     
-        print(hierarchical_clustering + heatmap2)
-        dev.off()
+        #Plot heatmap of marker genes
+        if (marker_genes[1] != 0)
+        { 
+                pdf(paste0(plot_path, "Marker Genes.pdf"), width = 7, height = 14)
+                print(hierarchical_clustering + heatmap2)
+                dev.off()
+        }
         
         return(hc)
 }

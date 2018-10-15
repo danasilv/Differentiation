@@ -24,7 +24,7 @@ library(diptest)
 
 #####################Load in dependencies#########################
 
-gencode = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/gencode_v19_gene_pos.txt")
+gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 #######################CNV detection#########################
 #Code is adapted from Chris Rodman, Summer 2018.

@@ -38,11 +38,11 @@ library(diptest)
 
 #####################Load in dependencies#########################
 
-hk = read.table("/Volumes/ahg_regevdata2/projects/IDHmut_Tcells/Simon_Kevin_Nucseq/resources/tirosh_house_keeping.txt", skip = 2)
-signatures = read.table("/Volumes/ahg_regevdata2/projects/IDHmut_Tcells/Simon_Kevin_Nucseq/resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
+hk = read.table("Resources/tirosh_house_keeping.txt", skip = 2)
+signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
 signatures = as.list(signatures)
 signatures = lapply(signatures, function(x) x[!is.na(x)])
-gencode = read.table("/Volumes/ahg_regevdata2/projects/IDHmut_Tcells/Simon_Kevin_Nucseq/resources/gencode_v19_gene_pos.txt")
+gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 ###################Network propagation############################
 #TODO: for all of these, add a column which specifies whether the edge should be one direction or both directions.

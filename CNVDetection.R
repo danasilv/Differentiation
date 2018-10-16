@@ -20,11 +20,16 @@ library(Rtsne)
 library(scales)
 library(biomaRt)
 library(diptest)
+library(multimode)
 
 
 #####################Load in dependencies#########################
 
+#Both of these files are for hg19. "Centromeres" was obtained from ucsc table browser,
+#"all tables" > "gap".
+
 gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+centromeres = read.table("Resources/Centromeres.txt")
 
 #######################CNV detection#########################
 #Code is adapted from Chris Rodman, Summer 2018.
@@ -207,7 +212,7 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
 #The oligo cells as baseline. "Both" means to use both cell types as baseline. "all" means return the whole data frame after correction, "malignant"
 #means return only the malignant cells after correction.
 
-baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method = c("mean", "both"), output = c("all", "malignant"))
+baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method = c("mean", "both"), output = c("all", "malignant"), noise_filter = 0.2)
 { 
         #Remove the meta info.
         temp = Ecnv_smoothed[,c(1,2,3,4)]
@@ -241,14 +246,19 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
                 
         }else if(method == "both")
         {
-                #TODO. the check against baseline max and min needs to happen CONCURRENTLY.
                 print ("Using oligodendrocytes and immune cells as controls.")
-                for (i in 1:ncol(Ecnv_smoothed_ref)) {
-                        Ecnv_smoothed_ref[ , i] = ifelse(Ecnv_smoothed_ref[ , i] > baseline_max + noise_filter, yes = Ecnv_smoothed_ref[ , i] - baseline_max, no = Ecnv_smoothed_ref[ , i])
-                        Ecnv_smoothed_ref[ , i] = ifelse(Ecnv_smoothed_ref[ , i] < baseline_min - noise_filter, yes = Ecnv_smoothed_ref[ , i] - baseline_min, no = Ecnv_smoothed_ref[ , i])
-                        #apply noise filter
-                        Ecnv_smoothed_ref[ , i] = ifelse((Ecnv_smoothed_ref[ , i] < baseline_min + noise_filter) & (Ecnv_smoothed_ref[ , i] > baseline_min - noise_filter), yes = 0, no = Ecnv_smoothed_ref[ , i])
+                for (i in 1:ncol(Ecnv_smoothed_ref)){
+                        Ecnv_smoothed_ref[,i] = ifelse (Ecnv_smoothed_ref[,i] > baseline_max + noise_filter,
+                                                 Ecnv_smoothed_ref[,i] - baseline_max, 
+                                                        ifelse(Ecnv_smoothed_ref[,i] < baseline_min - noise_filter,
+                                                        Ecnv_smoothed_ref[,i] - baseline_min,
+                                                        0)
+                                                 )
                 }
+                
+                
+                
+                
         }else {
                 print("Method should be either oligo or both.")
                 return (Ecnv_smoothed)
@@ -276,22 +286,50 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
 #For each sample, it checks each chromosome for a bimodal distribution of CNV signal. Then, 
 #order all cells within each sample by the chromosomes to identify genetic subclones.
 #the output of this function is a sorted inferCNV table, which can be plotted using plot.cnv.
-sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
+#The subclone identity info is outputed in the results folder.
+sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/")
 {
         Ecnv_data_only = Ecnv_smoothed_ref[,-c(1:4)]
-        
-        #TEST: try applying a filter
-        Ecnv_data_only[ Ecnv_data_only < noise_filter &  Ecnv_data_only > -noise_filter] = 0
-        
         #this will be the output
         Ecnv_data_out = Ecnv_smoothed_ref[,c(1:4)]
+        #Add back the data for the normal cells, which do not need to be sorted.
+        Ecnv_data_out = data.frame(Ecnv_data_out, Ecnv_data_only[,sample_ident %in% c("Oligodendrocyte", "Immune")])
         
-        Chr = factor(Ecnv_smoothed_ref$Chr, levels = rev(unique(Ecnv_smoothed_ref$Chr)))
+        #Format the centromere info.
+        centromeres = centromeres[centromeres$V8 == "centromere",]
+        centromeres = centromeres[,c(2,3,4)]
+        colnames(centromeres) = c("Chr", "Start", "End")
+        
+        #Annotate the p and q arms.
+        Chr = as.character(Ecnv_smoothed_ref$Chr)
+        
+        for (i in 1:nrow(Ecnv_smoothed_ref))
+        {
+                temp = Ecnv_smoothed_ref[i,1:4]
+                temp_ref = centromeres[temp$Chr,]
+                
+                if (temp$End <= temp_ref$Start)
+                {
+                        Chr[i] = paste0(Chr[i], "p")
+                }else if ((temp$Start > temp_ref$Start) & (temp$End < temp_ref$End)){
+                        Chr[i] = paste0(Chr[i], "cent")
+                }else{
+                        Chr[i] = paste0(Chr[i], "q")
+                }
+        }
+        
+        
+        Chr = factor(Chr, levels = rev(unique(Chr)))
         Chrs = unique(Chr)
+        #Ignore the "centromeric genes"
+        Chrs = Chrs[!grepl("cent", as.character(Chrs))]
+        
         Samples = levels(sample_ident)
         
-        for (i in 1:length(Samples))
+        #Don't need to sort Oligodendrocytes or Immune Cells.
+        for (i in 3:length(Samples))
         {
+                print(paste0("Starting to sort sample ", Samples[i], "."))
                 temp = Ecnv_data_only[,sample_ident == Samples[i]] 
                 #temp_order stores the clustering assignments for each chromosome.
                 temp_order = list()
@@ -299,18 +337,25 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
                 {
                         temp_chr = temp[Chr == Chrs[j],]
                         
-                        #Check for bimodality, using Hartigan's dip test.
+                        #Check for bimodality, using ACR test.
                         subclonality_check = apply(temp_chr, 2, function(x) mean(x))
-                        dip_test = dip.test(subclonality_check)$p
+                        if(sum(subclonality_check == 0))
+                        {
+                                mode_test = 1
+                        }else{ 
+                                mode_test = modetest(subclonality_check, method = "ACR")$p
+                        }
                         
                         #if bimodal, determine the cutoff point.
-                        if (dip_test <= 0.05)
+                        if (mode_test <= 0.1)
                         {
                                 clusters = kmeans(subclonality_check, 2)$cluster
                                 #If there is only a few cells in one of the clusters, just reset all cells to the same cluster.
                                 if ((sum(clusters == 1) < 3) | (sum(clusters == 2 ) < 3))
                                 {
                                         clusters = rep(1, length(subclonality_check))   
+                                }else{
+                                        print(paste0("Found 2 subclones based on chromosome ", Chrs[j], "."))
                                 }
                                 
                                 temp_order[[j]] = clusters
@@ -332,7 +377,10 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
                 temp = temp[,cells_order]
                 
                 Ecnv_data_out = data.frame(Ecnv_data_out, temp)
-                print(paste0("Completed sorting sample ", Samples[i], ". There are now ", ncol(Ecnv_data_out)-4, " Samples."))
+                print(paste0("Completed sorting sample ", Samples[i], ". There are now ", ncol(Ecnv_data_out)-4, " Cells."))
+                
+                #Output the ordering info.
+                write.csv(ordering, paste0(results_path, Samples[i], " Subclones.csv"))
         }
         
         return(Ecnv_data_out)
@@ -341,10 +389,9 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident)
 #This function plots the results of the inferred CNV. The input is the output of baseline.correction, and the output of
 #match.exome.cnv. If genes_cn is not supplied, only the plot for infer.cnv will be generated. Otherwise, both plots will
 #(for infer.cnv and exome cnv) will be grouped together as the output.
-plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0, noise_filter = 0.2)
+plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0, colours, noise_filter = 0.2)
 { 
-        #apply noise filter.
-        Ecnv_smoothed_ref[Ecnv_smoothed_ref < noise_filter & Ecnv_smoothed_ref > -noise_filter] = 0
+       
         
         #For the list of colours, add two new colours to the beginning for oligodendrocytes and immune cells.
         colours$Sample = c(Oligodendrocyte = "#CCCCCC", Immune = "#757474", colours$Sample)
@@ -352,6 +399,11 @@ plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0, noise_filter 
         
         Chr = factor(Ecnv_smoothed_ref$Chr, levels = rev(unique(Ecnv_smoothed_ref$Chr)))
         Ecnv_smoothed_ref = dplyr::select(Ecnv_smoothed_ref, -Chr, -Gene, -Start, -End)
+        
+
+        #apply noise filter. This is only done for the purposes of plotting.
+        Ecnv_smoothed_ref[Ecnv_smoothed_ref < noise_filter & Ecnv_smoothed_ref > -noise_filter] = 0
+        
         
         ha = HeatmapAnnotation (df = data.frame(Sample = sample_ident), col = colours)
         ha1 = Heatmap(Ecnv_smoothed_ref, 

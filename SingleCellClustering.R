@@ -23,15 +23,15 @@ library(Rtsne)
 library(scales)
 #library(biomaRt)
 library(diptest)
-
+library(useful)
+library(purrr)
 
 #####################Load in dependencies#########################
 
-hk = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/tirosh_house_keeping.txt", skip = 2)
-signatures = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
+signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
 signatures = as.list(signatures)
 signatures = lapply(signatures, function(x) x[!is.na(x)])
-gencode = read.table("/Volumes/ahg_regevdata2/projects/Glioma_differentiation/resources/gencode_v19_gene_pos.txt")
+gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 
 ####################Single cell analysis via Seurat############################
@@ -319,31 +319,22 @@ convert.merged.file = function(data)
 }
 
 
-#This function takes as argument a tpm matrix, a list of housekeeping genes, and a vector of Sample IDs (sample_ident).
+#This function takes as argument a tpm matrix and a vector of Sample IDs (sample_ident).
 #It will filters the data, and centers its expression levels.
-#The function also generates two QC plots. One for the number of genes expressed, one for expression of housekeeping genes.
+#The function also generates two QC plots. One for the number of genes expressed, one for aggregate expression of genes.
 #The output is a list containing filtered tpm matrix ($TPM) and the sample identities of the filtered tpm matrix ($sample_ident).
-tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, hk_cutoff = 2.5)
+tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, Ea_cutoff = 4)
 {
+        #the "temp" is for the second step of filtering (aggregate gene expression levels)
         temp = tpm
-        colnames(hkgenes) = "gene"
-        hkgenes$gene = as.character(hkgenes$gene)
         
         #Convert expression levels.
         tpm = log2(tpm/10 + 1)
         
-        #Calculate quality measures. Number of genes for which at least one read is mapped,
-        #and average expression level of a curated list of housekeeping genes. 
-        # Exclude cells with:
-        # less than nGene_cutoff_low genes, 
-        # average housekeeping expression level below hk_cutoff
-        # more than nGene_cutoff_high genes
+        #1. Filter cells based on the number of genes expressed.
         nGene = apply(tpm, 2, function(x) sum(x != 0))
-        tpm = data.frame(tpm, gene = as.character(rownames(tpm)), stringsAsFactors = FALSE)
-        hk_exprs = inner_join(hkgenes, tpm, by = "gene")
-        hk_exprs = colMeans(hk_exprs[,2:ncol(hk_exprs)])
         
-        #Generate QC plots.
+        #Generate QC plots
         nGene_toplot = data.frame(Sample = sample_ident, nGene = nGene)
         nGene_plot = ggplot(nGene_toplot, aes(factor(Sample), nGene)) + geom_violin() + geom_jitter()
         nGene_plot = nGene_plot + xlab("Sample") + ylab("Number of genes expressed")
@@ -353,31 +344,30 @@ tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene
         print(nGene_plot)
         ggsave(paste0(plot_path, "nGene QC.pdf"), height = 5.4, width = 9)
         
-        hk_toplot = data.frame(Sample = sample_ident, housekeeping = hk_exprs)
-        hk_plot = ggplot(hk_toplot, aes(factor(Sample), housekeeping)) + geom_violin() + geom_jitter()
-        hk_plot = hk_plot + xlab("Sample") + ylab("Mean expression of housekeeping genes")
-        hk_plot = hk_plot + theme(axis.text.x = element_text(angle = 60, hjust = 1))
-        hk_plot = hk_plot + geom_hline(yintercept = hk_cutoff, linetype = "dashed", color = "red")
-        print(hk_plot)
-        ggsave(paste0(plot_path, "hk QC.pdf"), height = 6.5, width = 9)
-        
-        #Determine which cells to keep.
-        keep = (nGene >= nGene_cutoff_low) & (nGene <= nGene_cutoff_high) & (hk_exprs >= hk_cutoff)
-        tpm = dplyr::select(tpm, -gene)
+        keep = (nGene >= nGene_cutoff_low) & (nGene <= nGene_cutoff_high)
         tpm = tpm[,keep]
         sample_ident = sample_ident[keep]
         
-        #Calculate aggregate expression of each gene, exclude genes with aggregate expression <4.
-        
-        temp = temp[,keep]
+        #2. Filter genes based on aggregate expression.
         Ea = apply(temp, 1, function(x) log2(mean(x)+1))
-        keep_gene = Ea >= 4
-        tpm = tpm[keep_gene,]
         
-        #Center expression levels.
+        #   Generate QC plot.
+        Ea_toplot = data.frame(Aggregate_Expression = Ea)
+        Ea_plot = ggplot(Ea_toplot, aes(Aggregate_Expression)) + geom_histogram(binwidth = 0.1)
+        Ea_plot = Ea_plot + xlab("Aggregate Gene Expression") + ylab("Count")
+        Ea_plot = Ea_plot + geom_vline(xintercept = Ea_cutoff, linetype = "dashed", color = "red")
+        print(Ea_plot)
+        ggsave(paste0(plot_path, "Ea QC.pdf"), height = 5.4, width = 9)
+        
+        keep_gene = Ea >= Ea_cutoff
+        tpm = tpm[keep_gene,]
+        rm(temp)
+        
+        #Center gene expression.
         mean_exprs = apply(tpm, 1, mean) 
         tpm = sweep(tpm, 1, mean_exprs, "-")
         
+        #Return results
         tpm_return = list()
         tpm_return[[1]] = tpm
         tpm_return[[2]] = sample_ident
@@ -389,15 +379,13 @@ tpm.process = function(tpm, hkgenes, sample_ident, plot_path = "figures/", nGene
 #This function will take as argument a filtered tpm matrix (from tpm.process), perform hierarchical clustering, and 
 #generate plots (heatmap of pearson correlations, and hierachical clustering) for exploratory analysis of the data.
 #if marker genes are supplied, a separate plot will be generated at the bottom of the heatmap.
-#It will return the clustering object.
+#It will return the hclust object.
 # Input: 
-# K - number of clusters
 # tpm - logged scale TPM
 # sample_ident - vector of sample names, for example MGH143
 # colours - a vector of color names, its length is the number of unique samples in the tpm
-# marker genes - if specified will annotate the cells with marker genes in the bottom
-#TODO: how to check user input for marker genes?
-tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours,
+# marker_genes - if specified will annotate the cells with marker genes in the bottom
+tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
                        marker_genes = 0)
 { 
         C = cor(tpm)
@@ -409,6 +397,12 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours
                                col = colours,
                                annotation_name_gp = gpar(fontsize = 8),
                                annotation_height = unit.c(unit(0.75, "cm"), unit(0.75, "cm")))
+        
+        #Remove marker genes that are not found in the data.
+        if (marker_genes[1] != 0)
+        {
+                marker_genes = intersect(marker_genes, rownames(tpm))
+        }
         
         #Generate heatmap
         heatmap = Heatmap(C, 
@@ -422,7 +416,7 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours
                 cluster_columns = hc, 
                 show_row_names = FALSE, 
                 show_column_names = FALSE, 
-                width = 3.5,
+                width = 6,
                 heatmap_legend_param = list(title_gp = gpar(fontsize = 10, fontface = "bold"), 
                                             labels_gp = gpar(fontsize = 8)))
         
@@ -440,22 +434,33 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", k = 3, colours
                           cluster_columns = FALSE,
                           show_column_names = TRUE,
                           show_row_names = FALSE,
-                          column_names_gp = gpar(fontsize = 7),
+                          column_names_gp = gpar(fontsize = 12),
                           width = 1
                           )
-                pdf(paste0(plot_path, "Correlation Heatmap.pdf"), width = 9, height = 7)
+                png(paste0(plot_path, "Correlation Heatmap.png"), width = 900, height = 700)
                 print(heatmap + heatmap2 + ha)
                 dev.off()
         }else{ 
-        pdf(paste0(plot_path, "Correlation Heatmap.pdf"), width = 9, height = 7)
+        png(paste0(plot_path, "Correlation Heatmap.png"), width = 900, height = 700)
         print(heatmap + ha)
         dev.off()
         }
         
-        pdf(paste0(plot_path, "Hierarchical Clustering.pdf"), width = 7, height = 7)
-        hierarchical_clustering = plot(hc, labels = cutree(hc, k = k))
+        #Plot Clustering on its own
+        pdf(paste0(plot_path, "Hierarchical Clustering.pdf"), width = 14, height = 7)
+        hierarchical_clustering = plot(as.hclust(cut(as.dendrogram(hc),0.85)$upper), labels = FALSE, 
+                                                  ylab = "Pearson Correlation",
+                                       xlab = FALSE)
         print(hierarchical_clustering)
         dev.off()
+        
+        #Plot heatmap of marker genes
+        if (marker_genes[1] != 0)
+        { 
+                pdf(paste0(plot_path, "Marker Genes.pdf"), width = 7, height = 14)
+                print(hierarchical_clustering + heatmap2)
+                dev.off()
+        }
         
         return(hc)
 }
@@ -669,15 +674,15 @@ plot.volin.for.TF = function(df.TimePoints,names.TimePoints, filename, results.d
 
 #This function takes as argument a filtered tpm matrix (from tpm.process, or after removing non-malignant cells), and then 
 #runs nmf to identify gene signatures. The output is a list containing gene names for each obtained signature.
-#Input: filtered tpm matrix.
+#Input: filtered tpm matrix. Sample identity vector.
 # n_gene_per_signature: the number of genes to return per signature
-tpm.to.nmf = function(tpm_filtered, n_gene_per_signature = 30)
+tpm.to.nmf = function(tpm_filtered, sample_ident, n_gene_per_signature = 30)
 {
         #convert negative values to 0, because NMF doesn't take negatives also we are more interested in positively expressed genes.
         tpm_filtered[tpm_filtered<0] <- 0
         
         #Get vector of unique sample IDs
-        sample = substr(colnames(tpm_filtered),1,6)
+        sample = sample_ident
         unique_samples = unique(sample)
         
         #convert data to list form.
@@ -692,7 +697,7 @@ tpm.to.nmf = function(tpm_filtered, n_gene_per_signature = 30)
         signatures = list()
         for (i in 1:length(unique_samples))
         {
-                print(paste0("Running NMF on Sample ", i))
+                print(paste0("Running NMF on Sample ", unique_samples[i]))
                 temp = nmf (tpm_filtered_listed[[i]],10)
                 w = basis(temp)
                 signatures [[i]] = apply(w, 2, function(x) head(rownames(w)[order(x, decreasing = TRUE)],n_gene_per_signature))
@@ -754,7 +759,7 @@ calc.signature.scores = function(tpm_filtered, nmf_signatures)
                 test = test - control_genes_exprs
                 signature_scores[[i]] <- test
         }
-        tpm_filtered = select(tpm_filtered, -gene)
+        tpm_filtered = dplyr::select(tpm_filtered, -gene)
         
         # Make a dataframe of all signature scores.
         signature_scores = data.frame(signature_scores)
@@ -815,7 +820,7 @@ calc.signature.scores.list = function(tpm_filtered, signatures)
                 test = test - control_genes_exprs
                 signature_scores[[i]] <- test
         }
-        tpm_filtered = select(tpm_filtered, -gene)
+        tpm_filtered = dplyr::select(tpm_filtered, -gene)
         
         # Make a dataframe of all signature scores.
         signature_scores = data.frame(signature_scores)
@@ -829,16 +834,16 @@ calc.signature.scores.list = function(tpm_filtered, signatures)
 #of signatures, for the purposes of identifying signatures to merge as meta-signatures. It outputs a clustered object of the signatures
 #and generates plots of the heatmap and hierarchical clustering. The purpose of this function is to assist in manually combining
 #signatures into meta-signatures using the create.metasignature function.
-cluster.signature.scores = function(nmf_signature_scores)
+cluster.signature.scores = function(nmf_signature_scores, plot_path)
 {
         signature_cluster = hclust(dist(t(nmf_signature_scores)))
         
         #Visualize.
-        pdf ("NMF signatures heatmap.pdf", width = 8, height = 8)
+        pdf (paste0(plot_path, "NMF signatures heatmap.pdf"), width = 8, height = 8)
         heatmap(as.matrix(nmf_signature_scores))
         dev.off()
         
-        pdf ("NMF Signature clusters.pdf", width = 8, height = 4)
+        pdf (paste0(plot_path, "NMF Signature clusters.pdf"), width = 8, height = 4)
         plot(signature_cluster)
         dev.off()
         
@@ -852,13 +857,13 @@ cluster.signature.scores = function(nmf_signature_scores)
 #meta-signature. It will write out the genes of that meta signature, the signatures that comprise that meta signature, and create a plot for that meta signature.
 #The output of the function is a data frame, containing the expression level of each cell for each gene of the meta-signature.
 
-create.metasignature = function(tpm_filtered, nmf_signatures, signature_scores, cluster_indices, cluster_name, n_metasignature_genes = 30)
+create.metasignature = function(tpm_filtered, plot_path, results_path, colours, nmf_signatures, signature_scores, cluster_indices, cluster_name, n_metasignature_genes = 30)
 { 
         #Aggregate all signatures together.
         signatures_aggregate = data.frame(nmf_signatures)
         colnames(signatures_aggregate) = paste0("Signature",1:ncol(signatures_aggregate))
         #write out a list of signature that comprise the meta signature.
-        write.csv(colnames(signatures_aggregate)[cluster_indices], paste0("MetaSignature ", cluster_name, " members.csv"))
+        write.csv(colnames(signatures_aggregate)[cluster_indices], paste0(results_path, "MetaSignature ", cluster_name, " members.csv"))
 
         meta_signature = as.character(unlist(as.list(signatures_aggregate[,cluster_indices])))
         meta_signature = unique(meta_signature)
@@ -871,22 +876,34 @@ create.metasignature = function(tpm_filtered, nmf_signatures, signature_scores, 
         #Sort and keep the top genes for the meta signature
         keep_meta_signature = sort(ranked, decreasing = TRUE) [1:n_metasignature_genes]
         #Write out the genes belonging to that meta signature.
-        write.csv(names(keep_meta_signature), paste0("MetaSignature ", cluster_name, " genes.csv"))
+        write.csv(names(keep_meta_signature), paste0(results_path, "MetaSignature ", cluster_name, " genes.csv"))
         
         to_plot = as.matrix(tpm_filtered[rownames(tpm_filtered) %in% names(keep_meta_signature),]) 
         to_plot = to_plot[,order(colSums(to_plot))]
+        
+        #Get sample identities, for plotting purposes
+        sample_ident = colnames(to_plot)
+        sample_ident = unlist(lapply(strsplit(sample_ident, "_"), function(x) x[1]))
+        
         keep_meta_signature = names(keep_meta_signature)
-     
-        plot = Heatmap(to_plot, 
+        
+        #Annotate correlation heatmap by Sample.
+        ha = rowAnnotation(df = data.frame(Sample = sample_ident), 
+                           show_annotation_name = TRUE,
+                           col = colours,
+                           annotation_name_gp = gpar(fontsize = 6),
+                           annotation_height = unit.c(unit(0.75, "cm"), unit(0.75, "cm")))
+        
+        plot = Heatmap(t(to_plot), 
         cluster_rows = F, 
         cluster_columns = F,
-        show_row_names = T,
-        show_column_names = F,
-        column_title = "Cells",
-        column_title_side = "bottom",
-        col = colorRamp2(seq(-1, 10, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299))))
-        pdf(paste0("NMF cluster ", cluster_name, ".pdf"), height = 4.5, width = 12)
-        print(plot)
+        show_row_names = F,
+        show_column_names = T,
+        row_title = "Cells",
+        col = colorRamp2(seq(-5, 10, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299))))
+        pdf(paste0(plot_path, "NMF cluster ", cluster_name, ".pdf"), height = 12, width = 7.5)
+        
+        print(plot + ha)
         dev.off()
         
         return(to_plot)
@@ -895,7 +912,7 @@ create.metasignature = function(tpm_filtered, nmf_signatures, signature_scores, 
 #The function takes as argument a list of meta-signatures (a list of outputs from create.metasignature). It outputs a data frame of GO Terms that can help
 #identify the cell types specific to each meta-signature.
 
-metasignature.go.terms = function(metasignatures, num_terms = 20)
+metasignature.go.terms = function(metasignatures, results_path, num_terms = 20)
 { 
         dbs <- c("GO_Biological_Process_2015")
         go_terms = list()
@@ -906,7 +923,7 @@ metasignature.go.terms = function(metasignatures, num_terms = 20)
 
         go_terms = data.frame(lapply(go_terms, function(x) x[[1]][1:num_terms,1]))
         colnames(go_terms) = paste0("MetaSignature", seq(1,length(metasignatures)))
-        write.csv(go_terms, "Go Terms.csv")
+        write.csv(go_terms, paste0(results_path, "Go Terms.csv"))
         return(go_terms)
 }
 

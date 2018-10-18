@@ -1,0 +1,530 @@
+```{r init}
+knitr::opts_chunk$set(echo = TRUE)
+
+path <- "/Volumes/ahg_regevdata2/projects/Glioma_differentiation/"
+
+library(Seurat)
+library(dplyr)
+library(Matrix)
+library(vioplot)
+library(plotrix)
+CITESEQ_COUNTS_THRESHOLD = 200
+
+#Define sample to be analyzed, and the sub-folders for tpm, figures, and results.
+sample = "MGG18"
+
+tpm_path = paste0(path, "TPM/", sample)
+figures_path = paste0(path,"figures/", sample,"/")
+results_path = paste0(path,"results/", sample,"/")
+```
+
+
+
+
+
+```{r read differentiation}
+# Read in cell hashtags.
+hashtag_files = list.files(paste0(tpm_path))
+hashtag_files = hashtag_files[grep("cellnames", hashtag_files)]
+
+hashtag = list()
+for (i in 1:length(hashtag_files))
+{hashtag[[i]] = read.table(paste0(tpm_path, "/", hashtag_files[i]), sep = ",", stringsAsFactors = F)}
+hashtag = do.call(rbind, hashtag)
+colnames(hashtag) = c("Barcode", "TimePoint")
+
+#Read in tumour data.
+tumor_10x = Read10X(paste0(tpm_path, "/GRCh38"))
+tumor_data = CreateSeuratObject(raw.data = tumor_10x, min.cells = 3, min.genes = 200, project = sample)
+
+
+#Add in hashtags as metadata.
+hashtag_metadata = data.frame(Barcode = tumor_data@cell.names, stringsAsFactors = F)
+hashtag_metadata = left_join(hashtag_metadata, hashtag, by = "Barcode")
+hashtag_metadata$TimePoint[is.na(hashtag_metadata$TimePoint)] = "None"
+
+timepoints = unique(hashtag_metadata$TimePoint)
+
+for (i in 1:length(timepoints))
+{
+  temp = hashtag_metadata$TimePoint == timepoints[i]
+  hashtag_metadata = cbind(hashtag_metadata, temp)
+  colnames(hashtag_metadata)[ncol(hashtag_metadata)] = timepoints[i]
+}
+rownames(hashtag_metadata) = hashtag_metadata$Barcode
+hashtag_metadata = dplyr::select(hashtag_metadata, -Barcode, -TimePoint)
+hashtag_metadata[,1:ncol(hashtag_metadata)] = apply(hashtag_metadata[,1:ncol(hashtag_metadata)], 1:2, as.numeric)
+tumor_data = AddMetaData(tumor_data, hashtag_metadata)
+
+#Data normalization
+tumor_data <- NormalizeData(object = tumor_data, normalization.method = "LogNormalize",
+                        scale.factor = 10000)
+
+#Force timepoint into the "ident" section for differential gene expression analysis between timepoints.
+hashtag_metadata = data.frame(Barcode = tumor_data@cell.names, stringsAsFactors = F)
+hashtag_metadata = left_join(hashtag_metadata, hashtag, by = "Barcode")
+hashtag_metadata$TimePoint[is.na(hashtag_metadata$TimePoint)] = "None"
+rownames(hashtag_metadata) = hashtag_metadata$Barcode
+
+tumor_data_timepoints = tumor_data
+tumor_data_timepoints = AddMetaData(tumor_data_timepoints, hashtag_metadata)
+tumor_data_timepoints = SetAllIdent(tumor_data_timepoints, "TimePoint")
+```
+
+```{r divide to timepoints}
+lst.TimePoints <- list()
+df.CONTROL <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == 'CONTROL'])) 
+df.1H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '1H'])) 
+df.3H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '3H'])) 
+df.6H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '6H'])) 
+df.9H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '9H'])) 
+df.12H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '12H']))
+df.24H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '24H'])) 
+df.48H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '48H'])) 
+lst.TimePoints[['CONTROL']] <- df.CONTROL
+lst.TimePoints[['1H']] <- df.1H
+lst.TimePoints[['3H']] <- df.3H
+lst.TimePoints[['6H']] <- df.6H
+lst.TimePoints[['9H']] <- df.9H
+lst.TimePoints[['12H']] <- df.12H
+lst.TimePoints[['24H']] <- df.24H
+lst.TimePoints[['48H']] <- df.48H
+names(lst.TimePoints) <- c('CONTROL','1H','3H','6H','9H','12H','24H','48H')
+
+```
+
+```{r nmf}
+num.nmf.factors = 4
+num.nmf.top.genes = 30
+for (name in names(lst.TimePoints))
+{
+  df.TimePoint <- lst.TimePoints[[name]]
+  t.df.TimePoint <- t(df.TimePoint)
+  t.df.TimePoint <- t.df.TimePoint[rowSums(t.df.TimePoint) > 0,]
+  nmf.df.TimePoint <- nmf(as.matrix(t.df.TimePoint),num.nmf.factors)
+  w = basis(nmf.df.TimePoint)
+  signatures = apply(w, 2, function(x) head(rownames(w)[order(x, decreasing = TRUE)],num.nmf.top.genes))
+  write.table(signatures,paste0(results_path,"/nmf/nmf_",name,"_",num.nmf.factors,"factors_top_",num.nmf.top.genes,"genes.txt"), row.names = FALSE)
+} 
+
+# Plot the intersection of the factors
+lst.nmf <- list()
+names.factors <- c("V1","V2","V3","V4")
+for (name in names(lst.TimePoints)) {
+  lst.nmf[[name]] <- read.table(paste0(results_path,"/nmf/nmf_",name,"_",num.nmf.factors,"factors_top_",num.nmf.top.genes,"genes.txt"), skip = 2)
+}
+
+# Calculate the maximum intersection of factors for each time point
+for (name1 in names(lst.TimePoints)) {
+  for (name2 in names(lst.TimePoints)) {
+    print (name1)
+    print (name2)
+    max.intersect = 0
+    for (factor1 in names.factors) {
+      for (factor2 in names.factors) {
+        max.intersect <- max(length(intersect(lst.nmf[[name1]][,factor1],lst.nmf[[name2]][,factor2])), max.intersect)
+        print(max.intersect)
+      }
+    }
+  }
+}
+
+
+# Plot the intersection of the factors
+lst.nmf <- list()
+names.factors <- c("V1","V2","V3","V4")
+for (name in names(lst.TimePoints)) {
+  lst.nmf[[name]] <- read.table(paste0(results_path,"/nmf/nmf_",name,"_",num.nmf.factors,"factors_top_",num.nmf.top.genes,"genes.txt"), skip = 2)
+}
+
+# Calculate the maximum intersection of a factor of the control with each of the time points
+name1 <- "CONTROL"
+count.nmf.intersections <- numeric(length(lst.TimePoints)*num.nmf.factors*num.nmf.factors)
+i <- 1
+for (name2 in names(lst.TimePoints)) {
+  print (name1)
+  print (name2)
+  for (factor1 in names.factors) {
+    for (factor2 in names.factors) {
+      count.nmf.intersections [[i]] <- length(intersect(lst.nmf[[name1]][,factor1],lst.nmf[[name2]][,factor2]))
+      i <- i+1
+    }
+  }
+}
+
+# Plot the correlations:
+library(corrplot)
+corrplot(count.nmf.intersections, type = "upper", order = "hclust", tl.col = "black", tl.srt = 45)
+
+library(raster)    
+r <- matrix(rnorm(8464,0,1),nrow=94, ncol=94)
+image(r)
+
+# Merge those that intersect?
+# Plot the expresission of each signature on each of the time points?
+
+
+```
+
+```{r violin plots for TF candidates}
+genes = c("OLIG1","OLIG2","SOX2","SOX8","POU3F3","HES6","POU3F2","HEY2","SOX5","RFX4","KLF15","CITED1","LHX2","VAX2","MYCL","SALL2","HES1","SOX4","DLX2","ID4","ID2","MYC","HEY1")
+ 
+df.CONTROL <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == 'CONTROL'])) 
+df.1H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '1H'])) 
+df.3H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '3H'])) 
+df.6H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '6H'])) 
+df.9H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '9H'])) 
+df.12H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '12H']))
+df.24H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '24H'])) 
+df.48H <- (t(tumor_data_timepoints@data[,tumor_data_timepoints@ident == '48H'])) 
+
+df.TimePoints <- list(df.CONTROL,df.1H,df.3H,df.6H,df.9H,df.12H,df.24H,df.48H)
+plot.volin.for.TF(df.TimePoints,c("Control","1H","3H","6H","9H","12H","24H","48H"),"MGG18_StemnessTF_normalize_data","/Volumes/ahg_regevdata2/projects/Glioma_differentiation/figures/MGG18_logeverything/")
+
+
+Epithelial.Markers <- c("COL4A1", "KRT1","DSG3","CDH1","LAMA1","MUC1","SDC1","KRT14")
+for (gene in Epithelial.Markers) 
+{
+  
+  if (gene %in% colnames(df.1H)) {
+    
+      print (gene)
+      pdf (paste0(figures_path,"/expresion_distribution_",gene,".pdf"),width = 20, height = 20)
+
+      vioplot(df.CONTROL[,gene]+rnorm(dim(df.CONTROL)[1], 0, 1e-6),
+            df.1H[,gene]+rnorm(dim(df.1H)[1], 0, 1e-6),
+            df.3H[,gene]+rnorm(dim(df.3H)[1], 0, 1e-6),
+            df.6H[,gene]+rnorm(dim(df.6H)[1], 0, 1e-6),
+            df.9H[,gene]+rnorm(dim(df.9H)[1], 0, 1e-6),
+            df.12H[,gene]+rnorm(dim(df.12H)[1], 0, 1e-6),
+            df.24H[,gene]+rnorm(dim(df.24H)[1], 0, 1e-6),
+            df.48H[,gene]+rnorm(dim(df.48H)[1], 0, 1e-6), 
+           col=c("gold"), names=c("Control","1H","3H","6H","9H","12H","24H","48H"))
+    
+      title(ylab=gene)
+      dev.off()
+  }
+  
+}
+
+tumor_data_timepoints <- ScaleData(tumor_data_timepoints, do.center = TRUE, do.scale = FALSE)
+genes = c("OLIG1","OLIG2","SOX2","SOX8","POU3F3","HES6","POU3F2","HEY2","SOX5","RFX4","KLF15","CITED1","LHX2","VAX2","MYCL","SALL2","HES1","SOX4","DLX2","ID4","ID2","MYC","HEY1")
+ 
+df.scale.CONTROL <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == 'CONTROL'])) 
+df.scale.1H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '1H'])) 
+df.scale.3H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '3H'])) 
+df.scale.6H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '6H'])) 
+df.scale.9H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '9H'])) 
+df.scale.12H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '12H']))
+df.scale.24H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '24H'])) 
+df.scale.48H <- (t(tumor_data_timepoints@scale.data[,tumor_data_timepoints@ident == '48H'])) 
+  
+Epithelial.Markers <- c("COL4A1", "KRT1","DSG3","CDH1","LAMA1","MUC1","SDC1")
+for (gene in Epithelial.Markers) 
+{
+  
+  if (gene %in% colnames(df.scale.1H)) {
+    
+      print (gene)
+      pdf (paste0(figures_path,"/scale_data/expresion_distribution_",gene,".pdf"),width = 20, height = 20)
+
+      vioplot(df.scale.CONTROL[,gene]+rnorm(dim(df.scale.CONTROL)[1], 0, 1e-6),
+            df.scale.1H[,gene]+rnorm(dim(df.scale.1H)[1], 0, 1e-6),
+            df.scale.3H[,gene]+rnorm(dim(df.scale.3H)[1], 0, 1e-6),
+            df.scale.6H[,gene]+rnorm(dim(df.scale.6H)[1], 0, 1e-6),
+            df.scale.9H[,gene]+rnorm(dim(df.scale.9H)[1], 0, 1e-6),
+            df.scale.12H[,gene]+rnorm(dim(df.scale.12H)[1], 0, 1e-6),
+            df.scale.24H[,gene]+rnorm(dim(df.scale.24H)[1], 0, 1e-6),
+            df.scale.48H[,gene]+rnorm(dim(df.scale.48H)[1], 0, 1e-6), 
+           col=c("gold"), names=c("Control","1H","3H","6H","9H","12H","24H","48H"))
+    
+      title(ylab=gene)
+      dev.off()
+  }
+  
+}
+```
+
+``` {r run_NMF}
+
+t.df.CONTROL <- t(df.CONTROL)
+t.df.CONTROL <- t.df.CONTROL[rowSums(t.df.CONTROL) > 0,]
+nmf.df.CONTROL <- nmf(as.matrix(t.df.CONTROL),10)
+
+
+# use the signaturre (binning) to calculate a score for each cell, plot the heat map - if two signatures are similar they shpuld be merged
+
+nmf(as.matrix(t(df.CONTROL)),10)
+temp <- df.CONTROL
+Ea = apply(temp, 1, function(x) log2(mean(x)+1))
+keep_gene = Ea >= 0.01
+tpm = temp[keep_gene,]
+
+#Center expression levels.
+mean_exprs = apply(tpm, 1, mean) 
+tpm = sweep(tpm, 1, mean_exprs, "-")
+
+tpm_filtered[tpm_filtered<0] <- 0
+tpm_filtered <- tpm_filtered[rowSums(tpm_filtered) > 0,]
+nmf (as.matrix(tpm_filtered),10)
+
+``` 
+
+
+
+``` {r calc signatures per cell}
+tpSig <- gbm2.sigs(tumor_data_timepoints)
+
+for (sig.name in colnames(tpSig)) {
+  vecSig <- tpSig[,sig.name]
+  names(vecSig) <- rownames(tpSig)
+  tumor_data_timepoints <- AddMetaData(tumor_data_timepoints, vecSig ,sig.name)
+  
+}
+
+
+df.meta.control <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == 'CONTROL',])
+df.meta.1H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '1H',])
+df.meta.3H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '3H',])
+df.meta.6H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '6H',])
+df.meta.9H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '9H',])
+df.meta.12H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '12H',])
+df.meta.24H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '24H',])
+df.meta.48H <- (tumor_data_timepoints@meta.data[tumor_data_timepoints@ident == '48H',])
+
+genes<- c("opc","npc","npc_opc","ac","mes","mes_ac")
+
+for (gene in genes){
+   pdf (paste0(figures_path,"signature_distribution_",gene,".pdf"),width = 20, height = 20)
+
+   vioplot(df.meta.control[,gene]+rnorm(dim(df.meta.control)[1], 0, 1e-6),
+            df.meta.1H[,gene]+rnorm(dim(df.meta.1H)[1], 0, 1e-6),
+            df.meta.3H[,gene]+rnorm(dim(df.meta.3H)[1], 0, 1e-6),
+            df.meta.6H[,gene]+rnorm(dim(df.meta.6H)[1], 0, 1e-6),
+            df.meta.9H[,gene]+rnorm(dim(df.meta.9H)[1], 0, 1e-6),
+            df.meta.12H[,gene]+rnorm(dim(df.meta.12H)[1], 0, 1e-6),
+            df.meta.24H[,gene]+rnorm(dim(df.meta.24H)[1], 0, 1e-6),
+            df.meta.48H[,gene]+rnorm(dim(df.meta.48H)[1], 0, 1e-6), 
+       col=c("gold","red","blue","grey"), names=c("Control","1H","3H","6H","9H","12H","24H","48H"))
+    
+      title(ylab=gene)
+      dev.off()
+}
+    
+```
+
+
+``` {r cluster the time points together and ss if they change}
+# remove the None from the data - I don't know what these are: ambient CITEseq?
+srt.all.tp <- SubsetData(tumor_data_timepoints,ident.use = c("CONTROL","1H","3H","6H","9H","12H","24H","48H"))
+srt.all.tp <- NormalizeData(object = srt.all.tp, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# Save data for WOT
+write.table(as.data.frame(as.matrix(t(srt.all.tp@data))),paste0(results_path,"/MGG18_normalizeddata.txt"),sep="\t")
+
+
+srt.all.tp<-init(srt.all.tp, hkgenes, projectname = "MGG18", figures_path = figures_path)
+srt.all.tp<-cluster(srt.all.tp, hkgenes, projectname = "MGG18", figures_path = figures_path)
+srt.all.tp<- RunTSNE(object = srt.all.tp, dims.use = 1:11, do.fast = TRUE)
+pdf(paste0(figures_path,"all_timepoints_in_clusters.pdf"))
+TSNEPlot(object = srt.all.tp)
+dev.off()
+
+tpall.Sig <- gbm2.sigs(srt.all.tp)
+  
+for (sig.name in colnames(tpall.Sig)) {
+  vecSig <- tpall.Sig[,sig.name]
+  names(vecSig) <- rownames(tpall.Sig)
+  srt.all.tp <- AddMetaData(srt.all.tp, vecSig ,sig.name)
+}
+
+pdf(paste0(figures_path,"all_sigs.pdf"))
+FeaturePlot(object = srt.all.tp, features.plot = colnames(tpall.Sig), cols.use = c("grey", "blue"), reduction.use = "tsne")
+dev.off()
+```
+
+``` {r signatures}
+
+for (sig.name in colnames(tpall.Sig)) {
+  
+  minx <- 10000
+  maxx <- 0
+  maxy <- 0
+
+  
+  # Set the same x limits for all the time piints - to make it easier to compare
+  for (i in 1:length(timepoints))  {
+    minx <- min(srt.all.tp@meta.data[,sig.name])
+    maxx <- max(srt.all.tp@meta.data[,sig.name]) 
+  }
+
+  
+    
+  # Prepare a layout for the gene
+  pdf(paste0(figures_path,sig.name,"_Dist.pdf"))
+  
+  layout(matrix(c(6, 2, 8, 7,
+                  1, 3, 4, 5), nr=2, byrow=T))
+  
+  for (i in 1:length(timepoints))
+  {
+    title = timepoints[i]
+   
+    if (title != "None")   {
+      hist(srt.all.tp@meta.data[,sig.name][srt.all.tp@ident == title], main = title, breaks=12, xlab = sig.name, xlim = c(minx, maxx), col = "blue")  
+    }
+  }
+  dev.off()
+}
+```
+
+``` {r genes}
+
+genes = c("OLIG1","OLIG2","SOX2","SOX8","POU3F3","HES6","POU3F2","HEY2","SOX5","RFX4","KLF15","CITED1","LHX2","VAX2","MYCL","SALL2","HES1","SOX4","DLX2","ID4","ID2","MYC","HEY1")
+
+for (gene in genes) {
+  
+  minx <- 10000
+  maxx <- 0
+  maxy <- 0
+
+  
+  # Set the same x limits for all the time piints - to make it easier to compare
+  for (i in 1:length(timepoints))  {
+    minx <- min(srt.all.tp@meta.data[,sig.name])
+    maxx <- max(srt.all.tp@meta.data[,sig.name]) 
+  }
+
+  
+    
+  # Prepare a layout for the gene
+  #pdf(paste0(figures_path,gene,"_dataDist.pdf"))
+  
+  layout(matrix(c(6, 2, 8, 7,
+                  1, 3, 4, 5), nr=2, byrow=T))
+  
+  for (i in 1:length(timepoints))
+  {
+    title = timepoints[i]
+   
+    if (title != "None")   {
+      hist(srt.all.tp@data[,gene][srt.all.tp@ident == title], main = title, breaks=12, xlab = sig.name, xlim = c(minx, maxx), col = "blue")  
+    }
+  }
+  #dev.off()
+}
+
+
+```
+
+```{r time points}
+hkgenes <- read.table("/Volumes/ahg_regevdata2/projects/Glioma_scGenetics/resources/tirosh_house_keeping.txt", skip = 2)
+
+# Prepare tSNE for each time point
+srtTimepoints <- list()
+for (i in 1:length(timepoints))
+{
+  srtTimepoints[[i]] <- SubsetData(tumor_data_timepoints,ident.use = timepoints[i])
+  srtTimepoints[[i]]<-init(srtTimepoints[[i]], hkgenes, projectname = timepoints[i], figures_path = figures_path)
+  srtTimepoints[[i]]<-cluster(srtTimepoints[[i]], hkgenes, projectname = timepoints[i], figures_path = figures_path)
+  srtTimepoints[[i]] <- RunTSNE(object = srtTimepoints[[i]], dims.use = 1:11, do.fast = TRUE)
+
+}
+```
+
+```{r calculate signatures}
+for (i in 1:length(timepoints))
+{
+  
+  tpSig <- gbm2.sigs(srtTimepoints[[i]])
+  
+  for (sig.name in colnames(tpSig)) {
+    vecSig <- tpSig[,sig.name]
+    names(vecSig) <- rownames(tpSig)
+    srtTimepoints[[i]] <- AddMetaData(srtTimepoints[[i]], vecSig ,sig.name)
+    
+  }
+}
+```
+
+```{r Expression of TFs found by Mario}
+for (i in 1:length(timepoints))
+{
+  pdf(paste0(figures_path,timepoints[i],"_SuvaDiffMarkers.pdf"))
+  FeaturePlot(object = srtTimepoints[[i]], features.plot = c("POU3F2","SOX2","SALL2","OLIG2"), cols.use = c("grey", "blue"), 
+    reduction.use = "tsne")
+  dev.off()
+}
+```
+
+```{r}
+#Not found in the alignment:
+#Sox1
+#"SOX21"
+#"ASCL1"
+#MYCL1 -> MYCL
+genes = c("OLIG1","OLIG2","SOX2","SOX8","POU3F3","HES6","POU3F2","HEY2","SOX5","RFX4","KLF15","CITED1","LHX2","VAX2","MYCL","SALL2","HES1","SOX4","DLX2","ID4","ID2","MYC","HEY1")
+for (gene in genes) {
+  minx <- 10000
+  maxx <- 0
+  maxy <- 0
+
+  
+  # Set the same x limits for all the time piints - to make it easier to compare
+  for (i in 1:length(timepoints))  {
+    title = timepoints[i]
+    if (title != "None") {
+      if (minx > min((srtTimepoints[[i]]@data[gene,]))) 
+          { minx <- min((srtTimepoints[[i]]@data[gene,]))}
+      if (maxx < max((srtTimepoints[[i]]@data[gene,]))) 
+        { maxx <- max((srtTimepoints[[i]]@data[gene,]))}    
+      
+      # Max counts for all time points
+      detected.genes <- srtTimepoints[[i]]@data[gene,][srtTimepoints[[i]]@data[gene,] > 0]
+      if (sum(detected.genes) > 0)
+      {
+        hisdata <- hist(detected.genes, breaks=12, col="red", main = title, xlab = "Seurat.data")
+        if (max(hisdata$counts) > maxy) 
+        { maxy <- max(hisdata$counts) }
+      }
+    }
+  }
+  if (minx < 0) {minx <- 0}
+  
+    
+  # Prepare a layout for the gene
+  pdf(paste0(figures_path,"SuvaGenes/",gene,"Dist.pdf"))
+  
+  layout(matrix(c(6, 2, 8, 7,
+                  1, 3, 4, 5), nr=2, byrow=T))
+  
+  #tpPlots = list()
+  for (i in 1:length(timepoints))
+  {
+    title = timepoints[i]
+    
+    # Remove zeros (undetrected) - not sure this is the correct strategy
+    detected.genes <- srtTimepoints[[i]]@data[gene,][srtTimepoints[[i]]@data[gene,] > 0]
+    
+    if (title != "None") {
+      if (sum(detected.genes) > 0)
+        hist(detected.genes, breaks=12, col="red", main = title, xlab = "Seurat.data", xlim = c(minx,maxx), ylim = c(0,maxy))
+      else
+        plot(1, type="n", xlab="", ylab="", xlim=c(0, 10), ylim=c(0, 10), main = "unexpressed/undeteted")
+    }
+    
+  }
+  #grid.ar
+  #pdf(paste0(figures_path,"SuvaGenes/",timepoints[i],"_",gene,"Dist.pdf"))
+  dev.off()
+}
+```
+
+``` {r MGG18 SS2}
+tumor_data = CreateSeuratObject(raw.data = tumor_10x, min.cells = 3, min.genes = 200, project = sample)
+
+```
+
+# plot the distribution of these geneS?
+mean(srtTimepoints[[2]]@data["POU3F2",])
+

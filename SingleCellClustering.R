@@ -180,7 +180,60 @@ cluster <- function(seurat_data, hkgenes, projectname = "Single Cell", figures_p
   return(seurat_data)
 }       
 
+#This function takes as an argument a seurat object that has been filtered, and returns calculated scores for a list of genes For control genes, we are binning all genes into 25 bins of expression levels, and randomly
+#selecting 100 genes from the same expression bin as each signature gene (see Tirosh et. al., Nature). The output of the function is a dataframe
+#of signature scores that may be used to annotate a seurat object as metadata.
 
+calc.sig.genes = function(seurat_data, signature.genes, name)
+{ 
+  #Binning all detected genes into 25 bins to identify control genes for each signature.
+  genes_detected <- rownames(seurat_data@data)
+  aggregate_exprs = rowMeans(as.matrix(seurat_data@data))
+  
+  # Kevin version: (somethomes it's mpossib;e to break the quantiles)
+  #control_bins = cut(aggregate_exprs, breaks = c(quantile(aggregate_exprs, probs = seq(0,1,by=0.04))),
+  #                   labels = 1:25, include.lowest=TRUE)
+  # Dana changed:
+  control_bins = cut(aggregate_exprs, breaks = c(seq(floor(min(aggregate_exprs)), ceiling(max(aggregate_exprs)), length.out = 25)),
+                     labels = 1:24, include.lowest=TRUE)
+  control_bins = data.frame(genes = genes_detected, mean = aggregate_exprs, bin = control_bins, stringsAsFactors = FALSE)
+  
+  binned_genes = list()
+  for (i in 1:25)
+  {
+    binned_genes[[i]] <- rownames(control_bins)[control_bins$bin == i]
+  }
+  
+  newsigs_genes_exprs <- FetchData(seurat_data, signature.genes)
+  
+  newsigs_mean <- rowMeans(newsigs_genes_exprs)
+  
+  
+  #For the gene signature, obtain the control genes and calculate the gene signature for each cell.
+ 
+  # Dana: ToDo - merge this with gbm2.
+  temp = control_bins[control_bins$genes %in% signature.genes,]
+  #For each gene on the list, pick out 100 genes randomly from that bin.
+  temp_control_genes = vector()
+  for (j in 1:nrow(temp))
+  {
+    temp2 = sample(binned_genes[[temp[j,]$bin]],min(100,length(binned_genes[[temp[j,]$bin]])))
+    temp_control_genes = c(temp_control_genes, temp2)
+  }
+  # For each cell, want the mean expression level across all the control genes.
+  temp_control_genes = FetchData(seurat_data, temp_control_genes)
+  control_genes_exprs = rowMeans(temp_control_genes)
+  # Subtract control gene expression from signature gene expression to get scores.
+  newsigs_mean = newsigs_mean - control_genes_exprs
+ 
+  
+  #format the dataframe for output
+  newsigs_mean = data.frame(newsigs_mean)
+  colnames(newsigs_mean) <- name
+  
+  return(newsigs_mean)
+  
+}
 
 #This function takes as an argument a seurat object that has been filtered, and returns calculated scores for the new signatures
 #from GBM2.0, and the old Verhaak signatures. For control genes, we are binning all genes into 25 bins of expression levels, and randomly
@@ -193,10 +246,7 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
         genes_detected <- rownames(seurat_data@data)
         aggregate_exprs = rowMeans(as.matrix(seurat_data@data))
         
-        # Kevin version: (somethomes it's mpossib;e to break the quantiles)
-        #control_bins = cut(aggregate_exprs, breaks = c(quantile(aggregate_exprs, probs = seq(0,1,by=0.04))),
-        #                   labels = 1:25, include.lowest=TRUE)
-        # Dana changed:
+        # Taking the mean expression of each gene across the data set, and binning the genes based on their mean expression
         control_bins = cut(aggregate_exprs, breaks = c(seq(floor(min(aggregate_exprs)), ceiling(max(aggregate_exprs)), length.out = 25)),
                            labels = 1:24, include.lowest=TRUE)
         control_bins = data.frame(genes = genes_detected, mean = aggregate_exprs, bin = control_bins, stringsAsFactors = FALSE)
@@ -204,7 +254,7 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
         binned_genes = list()
         for (i in 1:25)
         {
-                binned_genes[[i]] <- rownames(control_bins)[control_bins$bin == 1]
+                binned_genes[[i]] <- rownames(control_bins)[control_bins$bin == i]
         }
 
         #A. Look at new stemness markers as defined by GBM2.0
@@ -222,6 +272,7 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
         newsigs_genes_exprs <- list()
         for (i in 1:6) {newsigs_genes_exprs[[i]] <- FetchData(seurat_data, newsigs[[i]])}
         
+        # For ech gene in the signature -= copmpute its mean expression
         newsigs_mean <- list()
         for (i in 1:6) {newsigs_mean[[i]] <- rowMeans(newsigs_genes_exprs[[i]])}
         
@@ -229,9 +280,10 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
         #For each gene signature, obtain the control genes and calculate the gene signature for each cell.
         for (i in 1:length(newsigs))
         {
-                #temp = inner_join(data.frame(genes = as.character(newsigs[[i]])), control_bins)
-                # Dana: is this to choose just the genes in the signature? if so this can work: 
+               
+                # Todo: check what happens when we have a gene in the signature that was not detected
                 temp = control_bins[control_bins$genes %in% newsigs[[i]],]
+                
                 #For each gene on the list, pick out 100 genes randomly from that bin.
                 temp_control_genes = vector()
                 for (j in 1:nrow(temp))
@@ -239,9 +291,11 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
                         temp2 = sample(binned_genes[[temp[j,]$bin]],100)
                         temp_control_genes = c(temp_control_genes, temp2)
                 }
+                
                 # For each cell, want the mean expression level across all the control genes.
                 temp_control_genes = FetchData(seurat_data, temp_control_genes)
                 control_genes_exprs = rowMeans(temp_control_genes)
+
                 # Subtract control gene expression from signature gene expression to get scores.
                 newsigs_mean[[i]] = newsigs_mean[[i]] - control_genes_exprs
         }
@@ -251,7 +305,6 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
         colnames(newsigs_mean) =  c(colnames(ACvMes), colnames(NPCvOPC))
         
         return(newsigs_mean)
-
 }
 
 ####################Single cell analysis via hierarchical clustering/NMF##############################
@@ -431,6 +484,192 @@ tpm.expressed.genes = function(tpm, hc, k = 3, n_gene = 50)
         colnames(top_genes) = paste0("Cluster ", seq(1:k))
         
         return(top_genes)
+}
+
+vioplot2<-function (x, ..., range = 1.5, h = NULL, ylim = NULL, names = NULL, 
+                    horizontal = FALSE, col = "magenta", border = "black", lty = 1, 
+                    lwd = 1, rectCol = "black", colMed = "white", pchMed = 19, 
+                    at, add = FALSE, wex = 1, drawRect = TRUE) 
+{
+  if(!is.list(x)){
+    datas <- list(x, ...)
+  } else{
+    datas<-x
+  }
+  n <- length(datas)
+  if (missing(at)) 
+    at <- 1:n
+  upper <- vector(mode = "numeric", length = n)
+  lower <- vector(mode = "numeric", length = n)
+  q1 <- vector(mode = "numeric", length = n)
+  q3 <- vector(mode = "numeric", length = n)
+  med <- vector(mode = "numeric", length = n)
+  base <- vector(mode = "list", length = n)
+  height <- vector(mode = "list", length = n)
+  baserange <- c(Inf, -Inf)
+  args <- list(display = "none")
+  if (!(is.null(h))) 
+    args <- c(args, h = h)
+  for (i in 1:n) {
+    data <- datas[[i]]
+    data.min <- min(data)
+    data.max <- max(data)
+    q1[i] <- quantile(data, 0.25)
+    q3[i] <- quantile(data, 0.75)
+    med[i] <- median(data)
+    iqd <- q3[i] - q1[i]
+    upper[i] <- min(q3[i] + range * iqd, data.max)
+    lower[i] <- max(q1[i] - range * iqd, data.min)
+    est.xlim <- c(min(lower[i], data.min), max(upper[i], 
+                                               data.max))
+    smout <- do.call("sm.density", c(list(data, xlim = est.xlim), 
+                                     args))
+    hscale <- 0.4/max(smout$estimate) * wex
+    base[[i]] <- smout$eval.points
+    height[[i]] <- smout$estimate * hscale
+    t <- range(base[[i]])
+    baserange[1] <- min(baserange[1], t[1])
+    baserange[2] <- max(baserange[2], t[2])
+  }
+  if (!add) {
+    xlim <- if (n == 1) 
+      at + c(-0.5, 0.5)
+    else range(at) + min(diff(at))/2 * c(-1, 1)
+    if (is.null(ylim)) {
+      ylim <- baserange
+    }
+  }
+  if (is.null(names)) {
+    label <- 1:n
+  }
+  else {
+    label <- names
+  }
+  boxwidth <- 0.05 * wex
+  if (!add) 
+    plot.new()
+  if (!horizontal) {
+    if (!add) {
+      plot.window(xlim = xlim, ylim = ylim)
+      axis(2)
+      axis(1, at = at, label = label)
+    }
+    box()
+    for (i in 1:n) {
+      polygon(c(at[i] - height[[i]], rev(at[i] + height[[i]])), 
+              c(base[[i]], rev(base[[i]])), col = col, border = border, 
+              lty = lty, lwd = lwd)
+      if (drawRect) {
+        lines(at[c(i, i)], c(lower[i], upper[i]), lwd = lwd, 
+              lty = lty)
+        rect(at[i] - boxwidth/2, q1[i], at[i] + boxwidth/2, 
+             q3[i], col = rectCol)
+        points(at[i], med[i], pch = pchMed, col = colMed)
+      }
+    }
+  }
+  else {
+    if (!add) {
+      plot.window(xlim = ylim, ylim = xlim)
+      axis(1)
+      axis(2, at = at, label = label)
+    }
+    box()
+    for (i in 1:n) {
+      polygon(c(base[[i]], rev(base[[i]])), c(at[i] - height[[i]], 
+                                              rev(at[i] + height[[i]])), col = col, border = border, 
+              lty = lty, lwd = lwd)
+      if (drawRect) {
+        lines(c(lower[i], upper[i]), at[c(i, i)], lwd = lwd, 
+              lty = lty)
+        rect(q1[i], at[i] - boxwidth/2, q3[i], at[i] + 
+               boxwidth/2, col = rectCol)
+        points(med[i], at[i], pch = pchMed, col = colMed)
+      }
+    }
+  }
+  invisible(list(upper = upper, lower = lower, median = med, 
+                 q1 = q1, q3 = q3))
+}
+
+calc.nmf = function(df.data,name,results.dir,num.nmf.factors = 4,num.nmf.top.genes = 30) {
+  t.df.TimePoint <- t(df.data)
+  t.df.TimePoint <- t.df.TimePoint[rowSums(t.df.TimePoint) > 0,]
+  nmf.df.TimePoint <- nmf(as.matrix(t.df.TimePoint),num.nmf.factors)
+  w = basis(nmf.df.TimePoint)
+  signatures = apply(w, 2, function(x) head(rownames(w)[order(x, decreasing = TRUE)],num.nmf.top.genes))
+  
+  write.table(signatures,paste0(results.dir,"/nmf_",name,"_",num.nmf.factors,"factors_top_",num.nmf.top.genes,"genes.txt"), row.names = FALSE)
+}
+
+prepare.data.for.breaks = function(vec.expression, dims)
+{
+  return(log(vec.expression + 1) + rnorm(dims, 0, 1e-6))
+}
+
+
+# Creates a violin plot for each gene in the lists, for each data frame in df.TimePoints
+# input:
+# df.TimePoints - list of data frames. Each data frame is a tpm matrix
+# names - list of names corresponding to the data frames
+plot.volin.for.TF = function(df.TimePoints,names.TimePoints, filename, results.dir,Suva_genes = c("OLIG1","OLIG2","SOX2","SOX8","POU3F3","HES6","POU3F2","HEY2","SOX5","RFX4","KLF15","CITED1","LHX2","VAX2","MYCL","SALL2","HES1","SOX4","DLX2","ID4","ID2","MYC","HEY1","HEY1")
+                             ,Filbin_stemness = c("CD24","SOX6","SOX10")
+                             ,Filbin_differentiation = c("IFI6","IFI16","IFITM2","STAT2","S100A4","S100A6","S100A10","S100A11","S100A13","S100A16","SERPING1","SERPINGH1","SERPINGI1"))
+{
+  #Suva_genes = c("OLIG1","OLIG2","SOX2","SOX8","POU3F3","HES6","POU3F2","HEY2","SOX5","RFX4","KLF15","CITED1","LHX2","VAX2","MYCL","SALL2","HES1","SOX4","DLX2","ID4","ID2","MYC","HEY1","HEY1")
+  #Filbin_stemness = c("CD24","SOX6","SOX10")
+  #Filbin_differentiation = c("IFI6","IFI16","IFITM2","STAT2","S100A4","S100A6","S100A10","S100A11","S100A13","S100A16","SERPING1","SERPINGH1","SERPINGI1")
+  Filbin_genes = c(Filbin_stemness,Filbin_differentiation)
+  
+  genes<-Filbin_genes  
+
+  
+# for (df.TimePoint in df.TimePoints) {
+#    for (gene in c(union(Filbin_genes, Suva_genes))) {
+#      if (gene %in% colnames(df.TimePoints[[1]])) {
+#        print (gene)
+#        df.TimePoint[,gene] <- log(df.TimePoint[,gene] + 1) + rnorm(dim(df.TimePoint)[1], 0, 1e-6)
+#      }
+#    }
+#  }
+  
+  
+  pdf (paste0(results.dir,filename,"_Filbin.pdf"),width = 20, height = 20)
+  layout(matrix(c(1:length(genes)), nr=divisors(length(genes))[3], byrow=F))
+  
+  # For each gene create the violin plots, DIPG needs to be logged scaled
+  #ToDo: calc the ylim auto
+  for (gene in genes) 
+  {
+    print(gene)
+    if (gene %in% colnames(df.TimePoints[[1]])) {
+
+       if (gene %in% Filbin_stemness) {
+        
+        vioplot2(lapply(df.TimePoints, function(x) prepare.data.for.breaks(x[,gene], length(x[,gene]))), names=names.TimePoints, col = c("gold"), ylim = c(0,1.5))
+      }
+      else {
+        vioplot2(lapply(df.TimePoints, function(x) prepare.data.for.breaks(x[,gene], length(x[,gene]))), names=names.TimePoints, col = c("green"), ylim = c(0,1.5))
+      }
+      title(ylab=gene)
+    }
+  }
+  dev.off()
+  
+  pdf (paste0(results.dir,filename,"_Suva.pdf"),width = 20, height = 20)
+  layout(matrix(c(1:length(genes)), nr=4, byrow=F))
+  
+  # For each gene create the violin plots, DIPG needs to be logged scaled
+  for (gene in Suva_genes) 
+  {
+    print(gene)
+    if (gene %in% colnames(df.TimePoints[[1]])) {
+      
+      vioplot2(lapply(df.TimePoints, function(x) prepare.data.for.breaks(x[,gene], length(x[,gene]))), names=names.TimePoints, col = c("light blue"))
+      title(ylab=gene)
+    }
+  }
+  dev.off()
 }
 
 #This function takes as argument a filtered tpm matrix (from tpm.process, or after removing non-malignant cells), and then 

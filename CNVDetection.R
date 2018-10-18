@@ -391,13 +391,12 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
 #(for infer.cnv and exome cnv) will be grouped together as the output.
 plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0, colours, noise_filter = 0.2)
 { 
-       
-        
         #For the list of colours, add two new colours to the beginning for oligodendrocytes and immune cells.
         colours$Sample = c(Oligodendrocyte = "#CCCCCC", Immune = "#757474", colours$Sample)
         
-        
-        Chr = factor(Ecnv_smoothed_ref$Chr, levels = rev(unique(Ecnv_smoothed_ref$Chr)))
+        #The dataframe needs to be reversed for plotting purposes.
+        Ecnv_smoothed_ref = Ecnv_smoothed_ref[rev(rownames(Ecnv_smoothed_ref)),]
+        Chr = factor(Ecnv_smoothed_ref$Chr, levels = unique(Ecnv_smoothed_ref$Chr))
         Ecnv_smoothed_ref = dplyr::select(Ecnv_smoothed_ref, -Chr, -Gene, -Start, -End)
         
 

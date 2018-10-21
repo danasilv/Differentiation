@@ -3,7 +3,7 @@ library(Seurat)
 library(Matrix)
 library(stringr)
 library(DiagrammeR)
-library(fifer)
+#library(fifer)
 library(NMF)
 library(ComplexHeatmap)
 library(RColorBrewer)
@@ -38,11 +38,11 @@ library(diptest)
 
 #####################Load in dependencies#########################
 
-hk = read.table("Resources/tirosh_house_keeping.txt", skip = 2)
-signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
-signatures = as.list(signatures)
-signatures = lapply(signatures, function(x) x[!is.na(x)])
-gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+#hk = read.table("Resources/tirosh_house_keeping.txt", skip = 2)
+#signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
+#signatures = as.list(signatures)
+#signatures = lapply(signatures, function(x) x[!is.na(x)])
+#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 ###################Network propagation############################
 #TODO: for all of these, add a column which specifies whether the edge should be one direction or both directions.

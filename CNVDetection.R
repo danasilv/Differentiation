@@ -3,7 +3,7 @@ library(Seurat)
 library(Matrix)
 library(stringr)
 library(DiagrammeR)
-library(fifer)
+#library(fifer)
 library(NMF)
 library(ComplexHeatmap)
 library(RColorBrewer)
@@ -20,7 +20,7 @@ library(Rtsne)
 library(scales)
 library(biomaRt)
 library(diptest)
-library(multimode)
+#library(multimode)
 
 
 #####################Load in dependencies#########################
@@ -28,8 +28,8 @@ library(multimode)
 #Both of these files are for hg19. "Centromeres" was obtained from ucsc table browser,
 #"all tables" > "gap".
 
-gencode = read.table("Resources/gencode_v19_gene_pos.txt")
-centromeres = read.table("Resources/Centromeres.txt")
+#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+#centromeres = read.table("Resources/Centromeres.txt")
 
 #######################CNV detection#########################
 #Code is adapted from Chris Rodman, Summer 2018.
@@ -43,7 +43,7 @@ infer.cnv = function(tpm, gencode)
         gencode$Gene = as.character(gencode$Gene)
         
         #Order data by chromosome.
-        tpm = mutate(tpm, Gene = rownames(tpm))
+        tpm = dplyr::mutate(tpm, Gene = rownames(tpm))
         Ecnv = inner_join(gencode, tpm, by = "Gene")
         genes = Ecnv[,1:4]
         Ecnv = dplyr::select(Ecnv, -Gene, -Chr, -Start, -End)

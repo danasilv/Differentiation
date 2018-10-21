@@ -702,6 +702,8 @@ tpm.to.nmf = function(tpm_filtered, sample_ident, n_gene_per_signature = 30)
                 w = basis(temp)
                 signatures [[i]] = apply(w, 2, function(x) head(rownames(w)[order(x, decreasing = TRUE)],n_gene_per_signature))
         }
+        
+        names(signatures) = unique_samples
         return (signatures)        
 }
 
@@ -837,10 +839,16 @@ calc.signature.scores.list = function(tpm_filtered, signatures)
 cluster.signature.scores = function(nmf_signature_scores, plot_path)
 {
         signature_cluster = hclust(dist(t(nmf_signature_scores)))
-        
         #Visualize.
         pdf (paste0(plot_path, "NMF signatures heatmap.pdf"), width = 8, height = 8)
-        heatmap(as.matrix(nmf_signature_scores))
+        plot = Heatmap(as.matrix(nmf_signature_scores),
+                cluster_rows = T,
+                cluster_columns = T,
+                show_row_names = F,
+                column_names_gp = gpar(fontsize = 8),
+                col = colorRamp2(seq(-3, 8, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299)))
+                )
+        print(plot)
         dev.off()
         
         pdf (paste0(plot_path, "NMF Signature clusters.pdf"), width = 8, height = 4)

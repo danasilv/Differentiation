@@ -55,7 +55,7 @@ load_biogrid = function(biogrid_path = "~/Suva Lab/Dana project 2/RESOURCES/BIOG
                                       header = T, row.names = 1, stringsAsFactors = F)
         #keep interactions for human.
         network_database = network_database[network_database$Organism.Interactor.A == 9606 & network_database$Organism.Interactor.A == 9606,]
-        network_database = select(network_database, Official.Symbol.Interactor.A, Official.Symbol.Interactor.B)
+        network_database = dplyr::select(network_database, Official.Symbol.Interactor.A, Official.Symbol.Interactor.B)
         colnames(network_database) = c("from", "to")
         #remove cases where a gene "interacts with itself".
         network_database = network_database[network_database$from != network_database$to,]
@@ -475,6 +475,8 @@ propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-12, al
         } 
         
         #Propagation. 
+        #TODO. For cell propagation, each cell needs to be done separately. Otherwise some cells
+        #will converge well before others do!
         for (i in 1:n_iter)
         {
                 print(i)
@@ -554,7 +556,7 @@ plot.graph = function(graph_out, P, file1 = "graph initial.pdf", file2 = "graph 
         
 {
         graph = graph_from_data_frame(graph_out$edge_weights, directed = FALSE,vertices = as.character(graph_out$gene_names))
-        layout = layout_nicely(graph)
+        layout = layout_as_tree(graph)
         
         colours = colorRampPalette(c('white', "darkgoldenrod4"))
         

@@ -459,7 +459,6 @@ propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-10, al
         #TODO: Add a check for normalization.
         #TODO: normally would take 100s of iterations - is the network too connected?
         #TODO: how many genes? how many edges?
-        #TODO. Normalize all signals to 1.
 { 
         #Inform status.
         if (verbose) print(paste0("Running network propagation for ", n_iter, 
@@ -474,6 +473,9 @@ propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-10, al
                 P[[1]] = P_0
                 vector = FALSE
         } 
+        
+        #Normalize signal to 1.
+        P_0 = P_0/sum(P_0)
         
         #Propagation. 
         #TODO. For cell propagation, each cell needs to be done separately. Otherwise some cells
@@ -490,7 +492,9 @@ propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-10, al
                 if (sum((P[[i+1]] - P[[i]])^2)/length(P[[i+1]]) <= convergence_cutoff) break
         }
         
-        #TODO: results need to be normalized after propagation, divided by sum per cell? or is this necessary?
+        #Normalize output to 1.
+        P[[i+1]] = P[[i+1]]/sum(P[[i+1]])
+        
         if (verbose) print(paste0("Completed ", length(P) - 1, " iterations."))
         return (P)
 }

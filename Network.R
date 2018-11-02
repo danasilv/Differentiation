@@ -3,7 +3,7 @@ library(Seurat)
 library(Matrix)
 library(stringr)
 library(DiagrammeR)
-library(fifer)
+#library(fifer)
 library(NMF)
 library(ComplexHeatmap)
 library(RColorBrewer)
@@ -38,11 +38,11 @@ library(diptest)
 
 #####################Load in dependencies#########################
 
-hk = read.table("Resources/tirosh_house_keeping.txt", skip = 2)
-signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
-signatures = as.list(signatures)
-signatures = lapply(signatures, function(x) x[!is.na(x)])
-gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+#hk = read.table("Resources/tirosh_house_keeping.txt", skip = 2)
+#signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
+#signatures = as.list(signatures)
+#signatures = lapply(signatures, function(x) x[!is.na(x)])
+#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 ###################Network propagation############################
 #TODO: for all of these, add a column which specifies whether the edge should be one direction or both directions.
@@ -577,9 +577,13 @@ plot.graph = function(graph_out, P, file1 = "graph initial.pdf", file2 = "graph 
 
 #This function takes the output of propagate, and calculates pathway scores using reactome, before
 #and after network propagation.
+# Input:
+# P - list of Propagate matrixes (P_0, ...., P_final)
 #TODO: Clean it up.
 pathway.scores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCES/REACTOME")
 {
+  
+        # Read reactome
         pathways = read.delim(paste0(reactome_path, "/ReactomePathways.txt"), header = F,
                               stringsAsFactors = F)
         colnames(pathways) = c("Pathway", "Description", "Species")
@@ -613,6 +617,7 @@ pathway.scores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCE
         rownames(after_out) = rownames(before_out) = rownames(P[[1]])
         colnames(after_out) = colnames(before_out) = pathways
         
+        # Calculate the mean signal of the genes in each pathway
         for (i in 1:ncol(after_out))
         {
                 print(i)
@@ -631,6 +636,7 @@ pathway.scores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCE
         variance = apply(before_out, 2, var)
         test = before_out[,variance >= 0.05]
         
+        # Calculate the mean signal of the genes in each pathway
         for (i in 1:ncol(before_out))
         {
                 print(i)

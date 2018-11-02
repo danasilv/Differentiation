@@ -28,10 +28,10 @@ library(purrr)
 
 #####################Load in dependencies#########################
 
-signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
-signatures = as.list(signatures)
-signatures = lapply(signatures, function(x) x[!is.na(x)])
-gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+#signatures = read.table("Resources/GBM_signatures.csv", header = TRUE, sep = ",", stringsAsFactors = F)
+#signatures = as.list(signatures)
+#signatures = lapply(signatures, function(x) x[!is.na(x)])
+#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
 
 
 ####################Single cell analysis via Seurat############################
@@ -320,7 +320,7 @@ convert.merged.file = function(data)
 
 
 #This function takes as argument a tpm matrix and a vector of Sample IDs (sample_ident).
-#It will filters the data, and centers its expression levels.
+#It filters the data, and centers its expression levels.
 #The function also generates two QC plots. One for the number of genes expressed, one for aggregate expression of genes.
 #The output is a list containing filtered tpm matrix ($TPM) and the sample identities of the filtered tpm matrix ($sample_ident).
 tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, Ea_cutoff = 4)

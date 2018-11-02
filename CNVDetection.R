@@ -1,10 +1,10 @@
 #####################Load in R libraries#########################
-library(Seurat)
+#library(Seurat)
 library(Matrix)
 library(stringr)
 library(DiagrammeR)
-library(fifer)
-library(NMF)
+#library(fifer)
+#library(NMF)
 library(ComplexHeatmap)
 library(RColorBrewer)
 library(colorRamps)
@@ -28,8 +28,8 @@ library(multimode)
 #Both of these files are for hg19. "Centromeres" was obtained from ucsc table browser,
 #"all tables" > "gap".
 
-gencode = read.table("Resources/gencode_v19_gene_pos.txt")
-centromeres = read.table("Resources/Centromeres.txt")
+#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+#centromeres = read.table("Resources/Centromeres.txt")
 
 #######################CNV detection#########################
 #Code is adapted from Chris Rodman, Summer 2018.
@@ -43,7 +43,7 @@ infer.cnv = function(tpm, gencode)
         gencode$Gene = as.character(gencode$Gene)
         
         #Order data by chromosome.
-        tpm = mutate(tpm, Gene = rownames(tpm))
+        tpm = dplyr::mutate(tpm, Gene = rownames(tpm))
         Ecnv = inner_join(gencode, tpm, by = "Gene")
         genes = Ecnv[,1:4]
         Ecnv = dplyr::select(Ecnv, -Gene, -Chr, -Start, -End)
@@ -228,8 +228,8 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
                 baseline = apply(baseline, 1, mean)
         }else if (method == "both")
         {
-                baseline_oligo = apply(baseline_oligo, 1, mean)
-                baseline_immune = apply(baseline_immune, 1, mean)
+                if (length(oligo) > 1) { baseline_oligo = apply(baseline_oligo, 1, mean)}
+                if (length(immune) > 1) { baseline_immune = apply(baseline_immune, 1, mean)}
                 combined_baselines = data.frame (Oligo = baseline_oligo, Immune = baseline_immune)
                 baseline_max = apply(combined_baselines, 1, max)
                 baseline_min = apply(combined_baselines, 1, min)
@@ -287,7 +287,7 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
 #order all cells within each sample by the chromosomes to identify genetic subclones.
 #the output of this function is a sorted inferCNV table, which can be plotted using plot.cnv.
 #The subclone identity info is outputed in the results folder.
-sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/")
+sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/", centromeres)
 {
         Ecnv_data_only = Ecnv_smoothed_ref[,-c(1:4)]
         #this will be the output
@@ -392,7 +392,7 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
 plot.cnv = function(Ecnv_smoothed_ref, sample_ident, genes_cn = 0, colours, noise_filter = 0.2)
 { 
         #For the list of colours, add two new colours to the beginning for oligodendrocytes and immune cells.
-        colours$Sample = c(Oligodendrocyte = "#CCCCCC", Immune = "#757474", colours$Sample)
+#        colours$Sample = c(Oligodendrocyte = "#CCCCCC", Immune = "#757474", colours$Sample)
         
         #The dataframe needs to be reversed for plotting purposes.
         Ecnv_smoothed_ref = Ecnv_smoothed_ref[rev(rownames(Ecnv_smoothed_ref)),]

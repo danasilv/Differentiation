@@ -367,7 +367,7 @@ tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_l
         tpm = tpm[keep_gene,]
         rm(temp)
         
-        print(paste0("Aftering filtering, there are", ncol(tpm), " cells."))
+        print(paste0("Aftering filtering, there are ", ncol(tpm), " cells."))
         nGene = apply(tpm, 2, function(x) sum(x != 0))
         nGene_mean = mean(nGene)
         print(paste0("After filtering, the average number of genes expressed per cell is ", nGene_mean, "."))
@@ -377,7 +377,6 @@ tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_l
         mean_exprs = apply(tpm, 1, mean) 
         tpm = sweep(tpm, 1, mean_exprs, "-")
         
-     
         
         #Return results
         tpm_return = list()
@@ -438,7 +437,8 @@ tpm.cluster = function(tpm, sample_ident, plot_path = "figures/", colours,
                 marker_genes_exprs = tpm[marker_genes,]
                 heatmap2 = Heatmap(t(marker_genes_exprs),
                           col = colorRamp2(seq(-6, 8, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299))),
-                          cluster_rows = FALSE,
+                          cluster_rows = hc,
+                          name = "Relative Expression",
                           show_row_dend = FALSE, 
                           show_column_dend = FALSE,
                           row_dend_reorder = FALSE, 
@@ -714,6 +714,8 @@ tpm.to.nmf = function(tpm_filtered, sample_ident, n_gene_per_signature = 30)
                 w = basis(temp)
                 signatures [[i]] = apply(w, 2, function(x) head(rownames(w)[order(x, decreasing = TRUE)],n_gene_per_signature))
         }
+        
+        #TODO. Remove signatures with low standard deviation within each sample.
         
         names(signatures) = unique_samples
         return (signatures)        

@@ -28,8 +28,8 @@ library(multimode)
 #Both of these files are for hg19. "Centromeres" was obtained from ucsc table browser,
 #"all tables" > "gap".
 
-#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
-#centromeres = read.table("Resources/Centromeres.txt")
+gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+centromeres = read.table("Resources/Centromeres.txt")
 
 #######################CNV detection#########################
 #Code is adapted from Chris Rodman, Summer 2018.
@@ -57,6 +57,7 @@ infer.cnv = function(tpm, gencode)
         Ecnv_smoothed = integer(0)
         
         chromosomes = unique(genes$Chr)
+        
         for (j in 1:(length(chromosomes)-1))
         { 
                 print(paste0("Running InferCNV for Chromosome ", chromosomes[j], "."))
@@ -66,8 +67,11 @@ infer.cnv = function(tpm, gencode)
                 temp = integer(0)        
                 for (i in 51:(nrow(Ecnv_Chr)-50))
                 { 
-                        temp = rbind(temp, apply(Ecnv_Chr[i-50:i+50,], 2, mean))
+                        temp = rbind(temp, apply(Ecnv_Chr[(i-50):(i+50),], 2, mean))
                 }
+                #before averaging, the sd was evenly distributed across the chromosome.
+                #After averaging, the sd was highest at the 5' end. plot(apply(temp, 1, sd))
+                
                 temp = data.frame(Chr = rep(chromosomes[j], nrow(temp)), Gene = genes_temp$Gene[51:(nrow(Ecnv_Chr)-50)], 
                                   Start = genes_temp$Start[51:(nrow(Ecnv_Chr)-50)], End = genes_temp$End[51:(nrow(Ecnv_Chr)-50)], temp)
                 Ecnv_smoothed = rbind(Ecnv_smoothed, temp)
@@ -160,7 +164,7 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
                         temp = correlation[,Sample == unique_samples[i]]
                         temp_malignant_exprs = temp[,colnames(temp) %in% malignant_exprs]
                         genes_cn = rowMeans(temp_malignant_exprs)
-                        temp_cnv_correlations = apply(temp, 2, function(x) cor(x, genes_cn))
+                        temp_cnv_correlations = apply(temp, 2, function(x) cor(x, genes_cn, method = "spearman"))
                         temp_cnv_correlations = data.frame(Cell = colnames(temp), Correlation = temp_cnv_correlations)
                         cnv_correlations = rbind(cnv_correlations, temp_cnv_correlations)
                         temp_malignant = temp_cnv_correlations$Correlation >= correlation_cutoff
@@ -172,7 +176,7 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
                         #if exome cnv is supplied, calculate correlation with exome cnv as ground truth.
                         temp = correlation[,Sample == unique_samples[i]]
                         temp_exome = genes_cn[,colnames(genes_cn) == unique_samples[i]]
-                        temp_cnv_correlations = apply (temp, 2, function(x) cor(x, temp_exome))
+                        temp_cnv_correlations = apply (temp, 2, function(x) cor(x, temp_exome, method = "spearman"))
                         temp_cnv_correlations = data.frame(Cell = colnames(temp), Correlation = temp_cnv_correlations)
                         cnv_correlations = rbind(cnv_correlations, temp_cnv_correlations)
                         temp = temp_cnv_correlations$Correlation >= correlation_cutoff
@@ -190,17 +194,35 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
         cnv_signal_malignant = to_return$CNV_signal >= signal_cutoff
         cnv_correlation_malignant = to_return$Correlation >= correlation_cutoff
         malignant = cnv_signal_malignant & cnv_correlation_malignant
-        to_return = data.frame(to_return, Malignant = malignant)
+        indeterminate = xor(cnv_signal_malignant, cnv_correlation_malignant)
+        to_return = data.frame(to_return, Malignant = malignant, Indeterminate = indeterminate)
         
         #Generate plot of CNV correlation vs CNV signal for all cells.
         pdf(paste0(plot_path, "All samples CNV QC plot.pdf"), width = 7,height=7)
         toplot = data.frame(CNV_signal = to_return$CNV_signal,Correlation = to_return$Correlation)
         plot = ggplot(toplot,aes(x = CNV_signal, y = Correlation)) + geom_point()
         plot = plot + xlab("CNV signal") + ylab("CNV correlation")
+        plot = plot + xlim(c(0, 0.2))
         plot = plot + geom_hline(yintercept = correlation_cutoff, color = "red")
         plot = plot + geom_vline(xintercept = signal_cutoff, color = "red")
         print(plot)
         dev.off()
+        
+        #Generate plot of CNV correlation vs CNV signal for all cells
+        for (i in 1:length(unique_samples))
+        {
+                pdf(paste0(plot_path, unique_samples[i]," CNV QC plot.pdf"), width = 7,height=7)
+                toplot = to_return[Sample == unique_samples[i],]
+                toplot = data.frame(CNV_signal = toplot$CNV_signal, Correlation = toplot$Correlation)
+                plot = ggplot(toplot,aes(x = CNV_signal, y = Correlation)) + geom_point()
+                plot = plot + xlab("CNV signal") + ylab("CNV correlation")
+                plot = plot + xlim(c(0, 0.2))
+                plot = plot + geom_hline(yintercept = correlation_cutoff, color = "red")
+                plot = plot + geom_vline(xintercept = signal_cutoff, color = "red")
+                print(plot)
+                dev.off()
+                
+        }
         
         return (to_return)
 }
@@ -267,7 +289,7 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
         if (output == "all")
         {       
                 #This step will automatically remove cells that do not fall under any of these categories: malignant, oligo, or immune.
-                Ecnv_smoothed_ref = Ecnv_smoothed_ref[,colnames(Ecnv_smoothed_ref) %in% c(malignant,non_malignant)]
+                #Ecnv_smoothed_ref = Ecnv_smoothed_ref[,colnames(Ecnv_smoothed_ref) %in% c(malignant,non_malignant)]
                 #Put back the meta info.
                 Ecnv_smoothed_ref = data.frame(temp, Ecnv_smoothed_ref)
                 return(Ecnv_smoothed_ref)
@@ -327,7 +349,7 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
         Samples = levels(sample_ident)
         
         #Don't need to sort Oligodendrocytes or Immune Cells.
-        for (i in 3:length(Samples))
+        for (i in 1:length(Samples))
         {
                 print(paste0("Starting to sort sample ", Samples[i], "."))
                 temp = Ecnv_data_only[,sample_ident == Samples[i]] 
@@ -364,6 +386,8 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
                                 temp_order[[j]] = clusters
                         }
                 }
+                
+                
                 #convert the ordering to a dataframe.
                 ordering = do.call(rbind, temp_order)
                 rownames(ordering) = Chrs

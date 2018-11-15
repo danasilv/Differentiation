@@ -327,6 +327,7 @@ convert.merged.file = function(data)
 #The output is a list containing filtered tpm matrix ($TPM) and the sample identities of the filtered tpm matrix ($sample_ident).
 tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, Ea_cutoff = 4)
 {
+        print(paste0("Before filtering, there are ", ncol(tpm), " cells."))
         #the "temp" is for the second step of filtering (aggregate gene expression levels)
         temp = tpm
         
@@ -335,6 +336,9 @@ tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_l
         
         #1. Filter cells based on the number of genes expressed.
         nGene = apply(tpm, 2, function(x) sum(x != 0))
+        
+        nGene_mean = mean(nGene)
+        print(paste0("Before filtering, the average number of genes expressed per cell is ", nGene_mean, "."))
         
         #Generate QC plots
         nGene_toplot = data.frame(Sample = sample_ident, nGene = nGene)
@@ -365,9 +369,17 @@ tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_l
         tpm = tpm[keep_gene,]
         rm(temp)
         
+        print(paste0("Aftering filtering, there are", ncol(tpm), " cells."))
+        nGene = apply(tpm, 2, function(x) sum(x != 0))
+        nGene_mean = mean(nGene)
+        print(paste0("After filtering, the average number of genes expressed per cell is ", nGene_mean, "."))
+        
+        
         #Center gene expression.
         mean_exprs = apply(tpm, 1, mean) 
         tpm = sweep(tpm, 1, mean_exprs, "-")
+        
+     
         
         #Return results
         tpm_return = list()
@@ -838,19 +850,24 @@ calc.signature.scores.list = function(tpm_filtered, signatures)
 #of signatures, for the purposes of identifying signatures to merge as meta-signatures. It outputs a clustered object of the signatures
 #and generates plots of the heatmap and hierarchical clustering. The purpose of this function is to assist in manually combining
 #signatures into meta-signatures using the create.metasignature function.
-cluster.signature.scores = function(nmf_signature_scores, plot_path)
+cluster.signature.scores = function(nmf_signature_scores, tumour_ident, colours, plot_path)
 {
+        colnames(nmf_signature_scores) = gsub("Signature", "", colnames(nmf_signature_scores))
         signature_cluster = hclust(dist(t(nmf_signature_scores)))
         #Visualize.
+        ha = rowAnnotation (df = data.frame(Sample = tumour_ident), col = colours)
+        
+        
         pdf (paste0(plot_path, "NMF signatures heatmap.pdf"), width = 8, height = 8)
         plot = Heatmap(as.matrix(nmf_signature_scores),
                 cluster_rows = T,
                 cluster_columns = T,
                 show_row_names = F,
-                column_names_gp = gpar(fontsize = 8),
+                column_names_gp = gpar(fontsize = 6.5),
+                heatmap_legend_param = list(title = "Signature score"),
                 col = colorRamp2(seq(-3, 8, length.out=299), rev(colorRampPalette(brewer.pal(11, "RdBu"))(299)))
                 )
-        print(plot)
+        print(plot + ha)
         dev.off()
         
         pdf (paste0(plot_path, "NMF Signature clusters.pdf"), width = 8, height = 4)
@@ -894,6 +911,7 @@ create.metasignature = function(tpm_filtered, plot_path, results_path, colours, 
         #Get sample identities, for plotting purposes
         sample_ident = colnames(to_plot)
         sample_ident = unlist(lapply(strsplit(sample_ident, "_"), function(x) x[1]))
+        sample_ident = gsub("Peak1|Peak2", "", sample_ident)
         
         keep_meta_signature = names(keep_meta_signature)
         
@@ -937,6 +955,30 @@ metasignature.go.terms = function(metasignatures, results_path, num_terms = 20)
         return(go_terms)
 }
 
+#function for simple t.testing comparing two groups.
+#"group" is boolean, defining the "x" group.
 
+t_test = function(data, group, fold_change_cutoff = 1, fdr_cutoff = 0.05)
+{ 
+        out = data.frame()
 
+        for (i in 1:nrow(data))
+        {
+                 x = data[i,group]
+                 y = data[i,!group]
+                 fold_change = mean(as.numeric(x)) - mean(as.numeric(y))
+                 if (fold_change == 0) {p = 1}else{ 
+                        p = t.test(x,y)$p.value}
+        
+                 out_temp = data.frame(Gene = rownames(tumour_data)[i], Fold_Change = fold_change, p_val = p)
+                 out = rbind(out, out_temp)
+        }
 
+        #fdr.
+        fdr = p.adjust(out$p_val, method = "bonferroni")
+        out = data.frame(out, FDR = fdr)
+        out = out[(abs(out$Fold_Change) >= 1) & (out$FDR <= 0.05),]
+        out = dplyr::arrange(out, Fold_Change)
+        
+        return(out)
+}

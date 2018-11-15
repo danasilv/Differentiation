@@ -580,7 +580,7 @@ plot.graph = function(graph_out, P, file1 = "graph initial.pdf", file2 = "graph 
 # Input:
 # P - list of Propagate matrixes (P_0, ...., P_final)
 #TODO: Clean it up.
-pathway.scores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCES/REACTOME")
+calcPathwayScores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCES/REACTOME")
 {
   
         # Read reactome
@@ -593,7 +593,7 @@ pathway.scores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCE
                                          stringsAsFactors = F)
         
         pathway_memberships = dplyr::filter(pathway_memberships, V8 == "Homo sapiens")
-        pathway_memberships = pathway_memberships[,3:4]
+        pathway_memberships = pathway_memberships[,c(3,6)]
         colnames(pathway_memberships) = c("Gene", "Pathway")
         
         pathway_memberships = dplyr::mutate(pathway_memberships, Symbol = "ABCDE")
@@ -654,5 +654,7 @@ pathway.scores = function(P, reactome_path = "~/Suva Lab/Dana Project 2/RESOURCE
         
         write.csv(before_out, "before_out.csv")
         write.csv(after_out, "after_out.csv")
+        
+        return(after_out)
 }
 

@@ -11,7 +11,7 @@ library(plotrix)
 CITESEQ_COUNTS_THRESHOLD = 200
 
 #Define sample to be analyzed, and the sub-folders for tpm, figures, and results.
-sample = "MGG18"
+sample = "MGG8"
 
 tpm_path = paste0(path, "TPM/", sample)
 figures_path = paste0(path,"figures/", sample,"/")

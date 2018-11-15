@@ -287,13 +287,13 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
 #order all cells within each sample by the chromosomes to identify genetic subclones.
 #the output of this function is a sorted inferCNV table, which can be plotted using plot.cnv.
 #The subclone identity info is outputed in the results folder.
-sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/", centromeres)
+sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/", centromeres, skip_first_n_samples = 2, non_malignant.names = c("Oligodendrocyte", "Immune"))
 {
         Ecnv_data_only = Ecnv_smoothed_ref[,-c(1:4)]
         #this will be the output
         Ecnv_data_out = Ecnv_smoothed_ref[,c(1:4)]
         #Add back the data for the normal cells, which do not need to be sorted.
-        Ecnv_data_out = data.frame(Ecnv_data_out, Ecnv_data_only[,sample_ident %in% c("Oligodendrocyte", "Immune")])
+        Ecnv_data_out = data.frame(Ecnv_data_out, Ecnv_data_only[,sample_ident %in% non_malignant.names])
         
         #Format the centromere info.
         centromeres = centromeres[centromeres$V8 == "centromere",]
@@ -327,7 +327,7 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
         Samples = levels(sample_ident)
         
         #Don't need to sort Oligodendrocytes or Immune Cells.
-        for (i in 3:length(Samples))
+        for (i in (skip_first_n_samples + 1):length(Samples))
         {
                 print(paste0("Starting to sort sample ", Samples[i], "."))
                 temp = Ecnv_data_only[,sample_ident == Samples[i]] 

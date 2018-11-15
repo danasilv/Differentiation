@@ -1,0 +1,541 @@
+---
+title: "Running SCENIC"
+subtitle: SCENIC (Single Cell rEgulatory Network Inference and Clustering)
+output:
+  BiocStyle::html_document:
+    number_sections: no
+    toc: yes
+    toc_float: false
+    css: corrected.css
+  html_notebook:
+    toc: yes
+  pdf_document:
+    toc: yes
+package: '`r pkg_ver("SCENIC")`'
+bibliography: references.bib
+vignette: >
+  %\VignetteIndexEntry{Running SCENIC} 
+  %\VignetteEngine{knitr::rmarkdown} 
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+# Suppress loading messages when building the HTML
+suppressPackageStartupMessages({
+  library(SCENIC)
+  library(AUCell)
+  library(RcisTarget)
+  library(SingleCellExperiment)
+})
+
+# To build a personalized report, update this working directory:
+knitr::opts_knit$set(root.dir = '~/Documents/github/SCENIC_MouseBrain')
+```
+
+# SCENIC workflow
+
+This tutorial goes through the steps in the **SCENIC workflow**:
+
+Building the **gene regulatory network (GRN)**: 
+
+1. Identify potential targets for each TF based on co-expression.
+- Filtering the expression matrix and running GENIE3/GRNBoost. 
+- Formatting the targets from GENIE3/GRNBoost into co-expression modules. 
+
+2.  Select potential direct-binding targets (regulons) based on DNA-motif analysis (*RcisTarget*: TF motif analysis) 
+
+Identify **cell states**:
+
+3. Analyzing the network activity in each individual cell (*AUCell*)
+- Scoring regulons in the cells (calculate AUC)
+- Optional: Convert the network activity into ON/OFF (binary activity matrix)
+
+4. Identify stable cell states based on their gene regulatory network activity (cell clustering) and exploring the results...
+
+To start this tutorial you should have read the "Introduction and setup" vignette and run the setup steps (`vignette("SCENIC_Setup")`).
+
+# Directories
+During this workflow we will save multiple files. To keep them tidy, we recommend to set the working directory to a new folder. 
+
+For example:
+```{r setwd, results='hide', warning=FALSE, eval=FALSE}
+setwd("~/Documents/github/Diff")
+
+# # Done only once - this is data download (This may take a few minutes)
+# library(GEOquery)
+# geoFile <- getGEOSuppFiles("GSE60361", makeDirectory=FALSE)
+# gzFile <- grep("Expression", basename(rownames(geoFile)), value=TRUE)
+# txtFile <- gsub(".gz", "", gzFile)
+# gunzip(gzFile, destname=txtFile, remove=TRUE)
+# 
+# library(data.table)
+# geoData <- fread(txtFile, sep="\t")
+# geneNames <- unname(unlist(geoData[,1, with=FALSE]))
+# exprMatrix <- as.matrix(geoData[,-1, with=FALSE])
+# rm(geoData)
+# dim(exprMatrix)
+# rownames(exprMatrix) <- geneNames
+# exprMatrix[1:5,1:4]
+# 
+# # Remove file downloaded:
+# file.remove(txtFile)
+# 
+# cellLabels <- paste(file.path(system.file('examples', package='AUCell')), "mouseBrain_cellLabels.tsv", sep="/")
+# cellLabels <- read.table(cellLabels, row.names=1, header=TRUE, sep="\t")
+# cellLabels <- as.data.frame(cellLabels)
+# colnames(cellLabels) <- "CellType"
+# 
+# exprMatrix <- exprMatrix[unique(rownames(exprMatrix)),] # Remove duplicated rows
+# dim(exprMatrix)
+# 
+# library(SingleCellExperiment)
+# sceMouseBrain <- SingleCellExperiment(assays = list(counts = exprMatrix),
+# colData=data.frame(cellLabels[colnames(exprMatrix),, drop=FALSE]))
+# 
+# # setwd("SCENIC_MouseBrain")
+# dir.create("data")
+# save(sceMouseBrain, file="data/sceMouseBrain.RData")
+```
+
+By default, the intermediate files and plots will be saved into the `int` folder, with a numbered prefix to keep them in order. You may use these files to check details about each step, or re-run parts of the analysis with different settings.
+The main output (i.e. plots, HTML reports,... ) will be saved into the `output` folder.
+
+# Input
+
+## Expression matrix
+
+Single-cell RNA-seq expression matrix (with gene-symbol as `rownames`, see the `vignette("SCENIC_Setup")` for details).
+```{r loadExprMat}
+# setwd("SCENIC_MouseBrain")
+# optional: system("ln -s /path/to/file/sceMouseBrain.RData ../data/")
+library(SingleCellExperiment)
+load("data/sceMouseBrain.RData")
+exprMat <- counts(sceMouseBrain)
+dim(exprMat)
+```
+
+## Cell info
+In Step 3-4 (scoring the GRN and clustering), you can plot some information about the cells on the heatmaps or t-SNE. You can choose which variables from the phenodata to plot, and assign them a specific color (otherwise one will be assigned automatically):
+
+```{r cellInfo, fig.height=4, fig.width=4}
+cellInfo <- colData(sceMouseBrain)
+cellInfo$nGene <- colSums(exprMat>0)
+cellInfo <- data.frame(cellInfo)
+head(cellInfo)
+dir.create("int")
+saveRDS(cellInfo, file="int/cellInfo.Rds")
+
+# Color to assign to the variables (same format as for NMF::aheatmap)
+colVars <- list(CellType=setNames(c("forestgreen", "darkorange", "magenta4", "hotpink", "red3", "skyblue", "darkblue"), 
+    c("microglia", "endothelial-mural", "astrocytes_ependymal", "oligodendrocytes", "interneurons", "pyramidal CA1", "pyramidal SS")))
+saveRDS(colVars, file="int/colVars.Rds")
+plot.new(); legend(0,1, fill=colVars$CellType, legend=names(colVars$CellType))
+```
+
+# Initialize SCENIC settings
+
+In order to keep consistent settings across the multiple steps of SCENIC, most functions in SCENIC package use a common object where the options for the current run are stored. This object replaces the "arguments" for most functions, and should be created at the begining of a SCENIC run with the function `initializeScenic()`. 
+
+The default settings should be valid for most analyses. The parameters that need to be specified in all runs is the organism (`mgi` for mouse, `hgnc` for human, or `dmel` for fly), and the directory where the RcisTarget databases are stored (you may create a link in the current directory if that is more convenient, e.g. in linux:
+```{r linkDBs, eval=FALSE}
+system("ln -s ~/path/to/dbs databases")
+```
+
+For details on the options that can be modified check the help of `?initializeScenic` or of the specific function that takes it as input.
+
+```{r chooseOrg}
+#ddbFiles <- c("https://resources.aertslab.org/cistarget/databases/mus_musculus/mm9/refseq_r45/mc9nr/gene_based/mm9-500bp-upstream-7species.mc9nr.feather",
+# "https://resources.aertslab.org/cistarget/databases/mus_musculus/mm9/refseq_r45/mc9nr/gene_based/mm9-tss-centered-10kb-7species.mc9nr.feather")
+# # mc9nr: Motif collection version 9: 24k motifs
+# setwd("~/Documents/resources/cisTarget_databases/") # if needed
+# for(featherURL in dbFiles)
+# {
+#   download.file(featherURL, destfile=basename(featherURL)) # saved in current dir
+#   descrURL <- gsub(".feather$", ".descr", featherURL)
+#   if(file.exists(descrURL)) download.file(descrURL, destfile=basename(descrURL))
+# }
+
+
+
+library(SCENIC)
+org="mgi" # or hgnc, or dmel
+dbDir="~/Documents/resources/cisTarget_databases/" # RcisTarget databases location
+myDatasetTitle="SCENIC example on Mouse brain" # choose a name for your analysis
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, datasetTitle=myDatasetTitle, nCores=20) 
+
+# Modify if needed
+scenicOptions@inputDatasetInfo$cellInfo <- "int/cellInfo.Rds"
+scenicOptions@inputDatasetInfo$colVars <- "int/colVars.Rds"
+# Databases:
+# scenicOptions@settings$dbs <- setNames("mm9-tss-centered-5kb-10species.mc8nr.feather", "mm9-5kb-mc8nr")
+# scenicOptions@settings$db_mcVersion <- "v8"
+
+# Save to use at a later time...
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+# Co-expression network
+
+The first step of the SCENIC workflow is to infer potential transcription factor targets based on the expression data. To do this we use GENIE3 or GRNBoost. The input to either of these tools are the expression matrix (filtered), and a list of transcription factors (*potential regulators*). The output of GENIE3/GRBBoost, and a correlation matrix will be used to create the co-expression modules (`runSCENIC_1_coexNetwork2modules()`).
+
+*Choosing between GENIE3/GRNBoost*: In principle, many of the existing methods to infer co-expression networks could be used for this step, as long as its output is a list of potential targets for each TF (and it can be applied to scRNA-seq...).
+We selected **GENIE3** *(@huynh2010)* because it allows to identify non-linear relationships, even if they are only present in a subset of samples, and it was the best performer in the Network Inference DREAM5 challenge *(@marbach2012)*. GENIE3 can easily be run within R.
+
+However, GENIE3 is very time- and computationally-consuming (it will take several hours or days on datasets of 3-5k cells). To allow scalability to bigger datasets, we created **GRNboost** (see [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463)) and the [arboreto](https://arboreto.readthedocs.io) framework. GRNBoost provides similar results to GENIE3 in just a fraction of the time (publication in press), so we highly recommend it for bigger datasets. 
+
+*Subsampling cells*: When there is a high proportion of low-quality cells, or if the computation time is an issue, it is also possible to infer the regulatory network using a subset of cells (e.g. selecting random or high-quality cells as input to the co-expression analysis). The activity of the regulatory network, *trained* on this subset of cells, can then be evaluated on all the cells in the dataset with AUCell (Step 3).
+Note that to avois loss of resolution, the subset of cells should be representative of the whole dataset (e.g. contain sufficient representation of all the cell types).
+Examples of this approach are presented in [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463) (i.e. subsampling this mouse brain dataset, and the analysis of 49k cells from mouse retina).
+
+## Gene filter/selection
+
+To run GENIE3/GRNBoost we recommend to apply soft gene filter, to remove genes that are expressed either at very low levels or in too few cells. 
+Here we apply a filtering based on the total number of counts of the gene, and the number of cells in which it is detected. 
+
+1. Filter by the **total number of reads per gene**. This filter is meant to remove genes that are most likely noise. 
+By *default* it keeps only the genes with at least `r 3*.01*ncol(exprMat)` UMI counts across all samples 
+(e.g. the total number the gene would have, if it was expressed with a value of `3` in 1% of the cells). 
+Adjust this value (`minCountsPerGene`) according to the dataset (it will depend on the dataset units, e.g. UMI, TPMs...).
+
+2. **Filter by the **number of cells in which the gene is detected** (e.g. >0 UMI, or >1 log2(TPM)). 
+By *default* (`minSamples`), genes that are detected in at least *1%* of the cells are kept. 
+This filtering is meant to remove genes whose reads come from one a few 'noisy' cells (genes that are only expressed in one, or very few cells, gain a lot of weight if they happen to coincide in a given cell).
+To avoid removing small (but potentially interesting) cell populations, we recommend to set a percentage lower than the smallest population of cells to be detected. 
+
+3. Finally, only the genes that are **available in RcisTarget databases** will be kept. 
+This filter is mostly to save some running time for GENIE3/GRNBoost, since the genes that are not available in the databases will not be used in upcoming steps.
+
+```{r filterGenes}
+# (Adjust minimum values according to your dataset)
+genesKept <- geneFiltering(exprMat, scenicOptions=scenicOptions,
+                           minCountsPerGene=3*.01*ncol(exprMat),
+                           minSamples=ncol(exprMat)*.01)
+```
+
+Before proceeding to the network inference, check whether any known relevant genes are filtered-out (if any relevant gene is missing, double-check whether the filters are appropiate): 
+
+```{r checkMissingGenes}
+interestingGenes <- c("Neurod1", "Sox10", "Dlx1")
+interestingGenes[which(!interestingGenes %in% genesKept)]
+```
+
+We can now **filter the expression matrix** to contain only these `r length(genesKept)` genes. 
+This matrix is now ready for the co-expression analysis.
+```{r saveFilteredExprMat}
+exprMat_filtered <- exprMat[genesKept, ]
+dim(exprMat_filtered)
+```
+
+To avoid confusions in the following steps: 
+```{r rmExprMat}
+rm(exprMat)
+```
+
+## Correlation
+
+GENIE3/GRNBoost can detect both positive and negative associations. In order to distinguish potential activation from repression, we will split the targets into positive- and negative-correlated targets (i.e. Spearman correlation between the TF and the potential target).
+
+*(This step can be run either before/after or simultaneously to GENIE3/GRNBoost)*
+
+Calculate the correlation: 
+```{r correlationMat, eval=FALSE}
+corrMat <- cor(t(exprMat_filtered), method="spearman")
+# (Only the rows for TFs will be needed needed):
+# allTFs <- getDbTfs(scenicOptions)
+# corrMat <- corrMat[which(rownames(corrMat) %in% allTFs),]
+saveRDS(corrMat, file=getIntName(scenicOptions, "corrMat"))
+```
+
+## Option A: GENIE3 (R)
+
+The input to GENIE3 is typically an expression matrix, and a list of candidate regulators. 
+The function `runGenie3` will run GENIE3 with default settings, which are usually adequate for most datasets, using the transcription factors available in RcisTarget databases as candidate regulators.
+  
+Since GENIE3 is based on a Random Forest approach, each time it is run the results will be slightly different. The higher the number of trees used (`ntrees`), the lower the variability. We recommend to use `set.seed` to reproduce exact results in multiple runs. For more details, check `?GENIE3` (GENIE3 help) or `?runGenie3` (SCENIC wrapper for GENIE3).
+
+GENIE3 will typically take several hours (or days) to run. If you are running this workflow on an RStudio session, we recommend that you stop here and run the next code chunk in an independent R console (i.e. with `screen`/`tmux`) or in an server/HPC (if available). The upcoming code chunks will resume the workflow by loading GENIE3 output.
+
+
+```{r genie3, eval=FALSE}
+# setwd("SCENIC_MouseBrain")
+# library(SCENIC)
+# scenicOptions <- readRDS("int/scenicOptions.Rds")
+# library(SingleCellExperiment)
+# load("data/sceMouseBrain.RData")
+# exprMat <- counts(sceMouseBrain)
+# genesKept <- loadInt(scenicOptions, "genesKept")
+# exprMat_filtered <- exprMat[genesKept,]
+
+# Optional: add log (if it is not logged/normalized already)
+exprMat_filtered <- log2(exprMat_filtered+1) 
+
+# Run GENIE3
+runGenie3(exprMat_filtered, scenicOptions)
+```
+
+
+## Option B: GRNboost (Python)
+
+The input to GRNBoost is the filtered expression matrix (transposed), and a list of candidate regulators. 
+`exportsForGRNBoost` export these objects as text to import from GRNBoost:
+
+```{r TFlist, eval=FALSE}
+# Optional: add log (if it is not logged/normalized already)
+exprMat_filtered <- log2(exprMat_filtered+1)
+
+# Save TF list and expression matrix as text
+exportsForGRNBoost(exprMat_filtered, scenicOptions)
+```
+
+We are now ready to run GRNBoost. You can find the tutorial with some examples in  https://arboreto.readthedocs.io/en/latest/examples.html. Once it has finished running, you can import the output from GRNBoost back to R with: 
+
+```{r importGRNBoost, eval=FALSE}
+importGRNBoostResults()  # TODO (Not implemented yet!)
+```
+
+# Build and score the GRN (runSCENIC)
+
+Once the results from GENIE3/GRNBoost (and the correlation) are ready, the remaining steps of SCENIC can be run. 
+
+The easiest/fastest way is to use the following *wrapper* functions, each of them corresponding to one of the main steps in SCENIC workflow:
+
+  Build the *gene regulatory network*: 
+  1. Get co-expression modules
+  2. Get regulons (with `r  Biocpkg("RcisTarget")`): TF motif analysis)
+  
+  Identify *cell states*:
+  3. Score GRN (regulons) in the cells (with `r  Biocpkg("AUCell")`)
+  4. Cluster cells according to the GRN activity
+
+>An overview of the steps workflow is explained in [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463).
+Detailed tutorials/notebooks explaining the internal code of each of these functions are also available (see `vignette(package="SCENIC")`). These might be useful for users who want to know the details of the implementation, or to modify or run only some of the steps of the workflow.
+
+Re-load the expression matrix if necessary: 
+```{r loadData2}
+# setwd("SCENIC_MouseBrain")
+load("data/sceMouseBrain.RData")
+exprMat <- counts(sceMouseBrain) 
+# Optional: log expression (for TF expression plot, it does not affect any other calculation)
+exprMat <- log2(exprMat+1)
+dim(exprMat)
+```
+
+Run the remaining steps using the *wrapper* functions: 
+```{r runScenicWrapper, eval=FALSE}
+library(SCENIC)
+scenicOptions <- readRDS("int/scenicOptions.Rds")
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 20
+scenicOptions@settings$seed <- 123
+
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+runSCENIC_2_createRegulons(scenicOptions)
+runSCENIC_3_scoreCells(scenicOptions, exprMat)
+```
+
+## Optional: Creating/comparing t-SNEs
+
+The cells can now be grouped based on the AUC (*See the section below "Exploring > Cell states" for details*). 
+Since we use t-SNE as visualization, it is recommended to try different clustering/t-SNE settings to evaluate the stability of the states. 
+
+With this function multiple t-SNEs can be run with different settings. It will create all combinations between the selected "number of PCs" and "perplexity" (expected *running time*: few minutes to hours, depending on the number of cells): 
+```{r altTsnes, eval=FALSE}
+scenicOptions@settings$seed <- 123 # same seed for all of them
+# Run t-SNE with different settings:
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=c(5,15,50), perpl=c(5,15,50))
+fileNames <- tsneAUC(scenicOptions, aucType="AUC", nPcs=c(5,15,50), perpl=c(5,15,50), onlyHighConf=TRUE, filePrefix="int/tSNE_oHC")
+# Plot as pdf (individual files in int/): 
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_", list.files("int"), value=T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=FALSE)
+```
+
+and to view/compare them...
+```{r altTsnesPlotShown, eval=TRUE, fig.height=7, fig.width=6}
+par(mfcol=c(3,3))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=FALSE, varName="CellType", cex=.5)
+```
+
+```{r altTsnesPlot_oHC, eval=FALSE, fig.height=7, fig.width=6}
+# Using only "high-confidence" regulons (normally similar)
+par(mfcol=c(3,3))
+fileNames <- paste0("int/",grep(".Rds", grep("tSNE_oHC_AUC", list.files("int"), value=T, perl = T), value=T))
+plotTsne_compareSettings(fileNames, scenicOptions, showLegend=FALSE, varName="CellType", cex=.5)
+```
+
+The chosen t-SNE can then be saved as default to use for plots (can also be "binary", see below): 
+```{r changeDefaultTsne}
+scenicOptions@settings$defaultTsne$aucType <- "AUC"
+scenicOptions@settings$defaultTsne$dims <- 15
+scenicOptions@settings$defaultTsne$perpl <- 50
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+## Optional: Binarize the network activity (regulon *on/off*)
+
+Building the GRN and scoring its activity in AUCell is often enough for datasets with very clear cell types. However, in many cases it is also useful to binarize the activity score into "on/off"; either for easier interpretation, or for maximizing the differences across cell types. This is specially useful to reduce technical biases (e.g. number of detected genes, batch effects), or the grouping by sample of origin in cancer datasets (see [*@aibar2017*](http://dx.doi.org/10.1038/nmeth.4463)).
+
+To determine in which cells each regulon is active, we will use an AUC threshold. AUCell automatically calculates possible thresholds for the binarization, but they are often too conservative. We recommend to check these thresholds manually before proceeding to the binarization. This can be a iterative process, where the thresholds can be re-adjusted after an initial exploration. Once the final thresholds are selected, the cell-regulon activity will be summarized into a *binary activity matrix* in which the columns represent the cells and the rows the regulons. The coordinates of the matrix that correspond to active regulons in a given cell will contain a "1" value, and "0" all the others. 
+
+You can see the selected thresholds in the output from the previous step [file: `output/Step3_3.2_AUCtSNEs.html` (If you are using Rstudio, you might need to download the file and accompanying folder)], and these can be adjusted with AUCell's Shiny app: 
+
+```{r adjustThresholds, eval=FALSE}
+logMat <- exprMat # Better if it is logged/normalized
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat)
+savedSelections <- shiny::runApp(aucellApp)
+
+# Save the modified thresholds:
+newThresholds <- savedSelections$thresholds
+scenicOptions@fileNames$int["aucell_thresholds",1] <- "int/newThresholds.Rds"
+saveRDS(newThresholds, file=getIntName(scenicOptions, "aucell_thresholds"))
+saveRDS(scenicOptions, file="int/scenicOptions.Rds") 
+```
+
+Once you have optimized the thresholds, run `runSCENIC_4_aucell_binarize` to binarize the AUC, and generate some extra figures and clusterings:
+```{r binarize, eval=FALSE}
+# scenicOptions@settings$devType="png"
+runSCENIC_4_aucell_binarize(scenicOptions)
+```
+
+The t-SNEs can also be created using the binary activity matrix (in the same way as indicated in section *"Creating/comparing t-SNEs"*), just set `tsneAUC( ..., aucType="binary")` instead.
+
+# Exploring/interpreting the results 
+
+The `output` folder contains several files that provide an overview of the results from each step. These results can be explored in more detail through the intermediate files (saved in the `int` folder, which can be listed with `loadInt(scenicOptions)`).
+
+Some examples on how to explore the results:
+
+## Cell states 
+
+AUCell provides the activity of the regulons across the cells. By clustering the cells based on this regulon activity (either the continuous or binary AUC matrix), we can see whether there are groups of cells that tend to have the same regulons active, and reveal the network states that are recurrent across multiple cells. These states would be equivalent to the *attractor states* of the network. Combining these clustering with different visualization methods, we can explore the **association of cell states with specific regulons**. 
+
+SCENIC provides some wrapper functions to get a quick overview. For example, projecting the AUC and TF expression onto t-SNEs, and visualizing of the AUC as heatmaps, but feel free to explore alternative clustering and visualization tools.
+
+### Projection the AUC and TFexpression onto t-SNEs
+
+Briefly, a t-SNE is a 2D projection of the cells, where cells (dots) are placed close to each other if they have similar input profiles (in our case, regulon activity).
+The t-SNE usually allows to get a quick and easy overview of the cell states in the dataset. 
+Note however, that t-SNE works well to identify distinct classes, but it is not appropiate for dinamic/continuous processes (e.g. trajectory-like visualizations).
+
+AUCell's interactive app *(for [SCope](http://scope.aertslab.org), see section "Export to loom/SCope")*:
+```{r aucellApp2, eval=FALSE}
+logMat <- exprMat # Better if it is logged/normalized
+aucellApp <- plotTsne_AUCellApp(scenicOptions, logMat) #default t-SNE
+savedSelections <- shiny::runApp(aucellApp)
+```
+
+`AUCell_plotTSNE()` to save static plots:
+```{r tsneTfExpression, fig.height=6, fig.width=8}
+tSNE_scenic <- readRDS(tsneFileName(scenicOptions))
+aucell_regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC")
+
+# Show TF expression:
+par(mfrow=c(2,3))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, exprMat, aucell_regulonAUC[onlyNonDuplicatedExtended(rownames(aucell_regulonAUC))[c("Dlx1", "Sox10", "Neurod1", "Sox9","Irf1", "Maf")],], plots="Expression")
+```
+
+```{r tsneAUC_overview, eval=FALSE}
+# Save AUC as PDF:
+Cairo::CairoPDF("output/Step4_BinaryRegulonActivity_tSNE_colByAUC.pdf", width=20, height=15)
+par(mfrow=c(4,6))
+AUCell::AUCell_plotTSNE(tSNE_scenic$Y, cellsAUC=aucell_regulonAUC, plots="AUC")
+dev.off()
+```
+
+Density plot to detect most likely stable states (higher-density areas in the t-SNE):
+```{r tSNE_density, fig.height=4, fig.width=4}
+library(KernSmooth)
+library(RColorBrewer)
+dens2d <- bkde2D(tSNE_scenic$Y, 1)$fhat
+image(dens2d, col=brewer.pal(9, "YlOrBr"), axes=FALSE)
+contour(dens2d, add=TRUE, nlevels=5, drawlabels=FALSE)
+```
+
+Show several regulons simultaneously:
+```{r tSNE_3cols, fig.height=4, fig.width=8}
+#par(bg = "black")
+par(mfrow=c(1,2))
+
+regulonNames <- c( "Dlx1","Sox9")
+cellCol <- plotTsne_rgb(scenicOptions, regulonNames, aucType="AUC", aucMaxContrast=0.6)
+text(-30,-25, attr(cellCol,"red"), col="red", cex=.7, pos=4)
+text(-30,-25-4, attr(cellCol,"green"), col="green3", cex=.7, pos=4)
+
+regulonNames <- list(red=c("Sox10", "Sox8"),
+                     green=c("Maf"),
+                     blue=c( "Neurod2"))
+cellCol <- plotTsne_rgb(scenicOptions, regulonNames, aucType="Binary")
+text(-30,-25, attr(cellCol,"red"), col="red", cex=.7, pos=4)
+text(-30,-25-4, attr(cellCol,"green"), col="green3", cex=.7, pos=4)
+text(-30,-25-8, attr(cellCol,"blue"), col="blue", cex=.7, pos=4)
+```
+
+## GRN: Regulon targets and motifs
+
+**Genes included in the regulons**: 
+
+```{r seeRegulons}
+regulons <- loadInt(scenicOptions, "regulons")
+regulons[c("Dlx5", "Relb")]
+```
+
+Note than only regulons with 10 genes or more are scored with AUCell: 
+```{r seeRegulons2}
+regulons <- loadInt(scenicOptions, "aucell_regulons")
+head(cbind(onlyNonDuplicatedExtended(names(regulons))))
+```
+
+Details on the TF-target links: For each TF-target pair, the stats from the intermediate steps are summarized in `loadInt(scenicOptions, "regulonTargetsInfo")` (saved as text in: `getOutName(scenicOptions, "s2_regulonTargetsInfo")`: `r getOutName(scenicOptions, "s2_regulonTargetsInfo")`). This table can be used to explore the support to specific links. Since it will typically contain several thousand rows (in this run: `r nrow(loadInt(scenicOptions, "regulonTargetsInfo"))`), in most cases it is advisable to subset it before exporting it as HTML.
+
+```{r motifEnrichmentDT}
+regulonTargetsInfo <- loadInt(scenicOptions, "regulonTargetsInfo")
+regulonTargetsInfo <- RcisTarget::addLogo(regulonTargetsInfo, motifCol="bestMotif")
+regulonTargetsInfo$Genie3Weight <- signif(regulonTargetsInfo$Genie3Weight, 2)
+
+
+colsToShow <- c("TF", "gene", "nMotifs", "bestMotif", "logo", "NES", "highConfAnnot", "Genie3Weight")
+DT::datatable(regulonTargetsInfo[TF=="Dlx5" & highConfAnnot==TRUE, colsToShow, with=F], escape=FALSE, filter="top")
+```
+
+
+The full list of **TF motifs** supporting the regulons can be seen in the restuls from **RcisTarget motif enrichment results** (for the co-expression modules). These are saved in `motifEnrichment_selfMotifs_wGenes`.
+A preview of these results is exported as html in *`r getOutName(scenicOptions, "s2_motifEnrichmentHtml")`* (and as text in: *`r getOutName(scenicOptions, "s2_motifEnrichment")`*).
+
+Alternative tables, showing more or fewer rows/columns could be generated modifiying this code: 
+
+```{r motifEnrichmentDTsubset, eval=FALSE}
+motifEnrichment_selfMotifs_wGenes <- loadInt(scenicOptions, "motifEnrichment_selfMotifs_wGenes")
+motifEnrichment_selfMotifs_wGenes <- RcisTarget::addLogo(motifEnrichment_selfMotifs_wGenes)
+colsToShow <- c("motifDb", "logo", "NES", "geneSet", "TF_highConf") # "TF_lowConf", "enrichedGenes"
+DT::datatable(motifEnrichment_selfMotifs_wGenes[highlightedTFs=="Dlx5", colsToShow, with=F], escape=FALSE, filter="top")
+```
+
+# Export to loom/SCope
+
+The results from SCENIC can also be explored in http://scope.aertslab.org ([*@davie2018*](https://doi.org/10.1016/j.cell.2018.05.057)).
+
+The `.loom` file can be created with the function `export2scope()`. This function saves the SCENIC data into a .loom file. 
+
+```{r eval=FALSE}
+# DGEM (Digital gene expression matrix)
+# (non-normalized counts)
+library(SingleCellExperiment)
+load("data/sceMouseBrain.RData")
+dgem <- counts(sceMouseBrain)
+head(colnames(dgem))  #should contain the Cell ID/name
+
+# Export:
+scenicOptions@fileNames$output["loomFile",] <- "mouseBrain.loom"
+export2scope(scenicOptions, dgem)
+```
+
+To add extra data (e.g. embeddings or clusters), see `help(package="SCopeLoomR")`.
+
+# SessionInfo
+```{r sessionInfo}
+date()
+sessionInfo()
+```
+
+# References
+

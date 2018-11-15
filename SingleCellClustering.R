@@ -247,8 +247,10 @@ gbm2.sigs = function(seurat_data, signature.dir ="/Volumes/ahg_regevdata2/projec
         aggregate_exprs = rowMeans(as.matrix(seurat_data@data))
         
         # Taking the mean expression of each gene across the data set, and binning the genes based on their mean expression
-        control_bins = cut(aggregate_exprs, breaks = c(seq(floor(min(aggregate_exprs)), ceiling(max(aggregate_exprs)), length.out = 25)),
-                           labels = 1:24, include.lowest=TRUE)
+        control_bins = cut(aggregate_exprs, breaks = c(quantile(aggregate_exprs, probs = seq(0,1,by=0.04), na.rm = TRUE)),
+                                             labels = 1:25, include.lowest=TRUE, na.rm = TRUE)
+          #cut(aggregate_exprs, breaks = c(seq(floor(min(aggregate_exprs)), ceiling(max(aggregate_exprs)), length.out = 25)),
+          #                 labels = 1:24, include.lowest=TRUE)
         control_bins = data.frame(genes = genes_detected, mean = aggregate_exprs, bin = control_bins, stringsAsFactors = FALSE)
         
         binned_genes = list()

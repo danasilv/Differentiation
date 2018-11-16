@@ -151,6 +151,16 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
         
         unique_samples = unique(Sample)
         
+        #Here, check if each unique sample contains at least 3 malignant cells. If there are less than 3, consider
+        #all cells of the sample to be non-malignant.
+        tally = vector()
+        for (i in 1:length(unique_samples))
+        {
+                check = colnames(correlation)[Sample == unique_samples[i]]
+                tally[i] = sum(check %in% malignant_exprs)
+        }
+        
+        
         #The following vector is boolean, stores the locations of all malignant cells by cnv correlation.
         malignant = vector()
         #The following dataframe is for storing cnv_correlations
@@ -162,14 +172,28 @@ id.malignant = function(Ecnv_smoothed, malignant_exprs, sample_ident, plot_path 
                 for (i in 1:length(unique_samples))
                 {  
                         temp = correlation[,Sample == unique_samples[i]]
-                        temp_malignant_exprs = temp[,colnames(temp) %in% malignant_exprs]
-                        genes_cn = rowMeans(temp_malignant_exprs)
-                        temp_cnv_correlations = apply(temp, 2, function(x) cor(x, genes_cn, method = "spearman"))
+                        
+                        #The ifelse here guards against samples that do not have >2 malignant cells.
+                        #For those samples, the cnv_correlation of all cells is set to 0.
+                        if (tally[i] > 2)
+                        { 
+                                temp_malignant_exprs = temp[,colnames(temp) %in% malignant_exprs]
+                                genes_cn = rowMeans(temp_malignant_exprs)
+                                temp_cnv_correlations = apply(temp, 2, function(x) cor(x, genes_cn, method = "spearman"))
+                        }else{
+                                temp_cnv_correlations = rep(0, ncol(temp))
+                        }
+                        
+                        #There are a few cells for which temp_cnv_correlation becomes "NA" becomes the CNV values for that cell are all 0s.
+                        temp_cnv_correlations[is.na(temp_cnv_correlations)] = 0
+                        
                         temp_cnv_correlations = data.frame(Cell = colnames(temp), Correlation = temp_cnv_correlations)
                         cnv_correlations = rbind(cnv_correlations, temp_cnv_correlations)
                         temp_malignant = temp_cnv_correlations$Correlation >= correlation_cutoff
                         malignant = c(malignant,temp_malignant)
                 }
+                
+                
         } else {
                 for (i in 1:length(unique_samples))
                 {
@@ -309,6 +333,8 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
 #order all cells within each sample by the chromosomes to identify genetic subclones.
 #the output of this function is a sorted inferCNV table, which can be plotted using plot.cnv.
 #The subclone identity info is outputed in the results folder.
+ 
+
 sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/", centromeres)
 {
         Ecnv_data_only = Ecnv_smoothed_ref[,-c(1:4)]
@@ -351,55 +377,62 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
         #Don't need to sort Oligodendrocytes or Immune Cells.
         for (i in 1:length(Samples))
         {
-                print(paste0("Starting to sort sample ", Samples[i], "."))
-                temp = Ecnv_data_only[,sample_ident == Samples[i]] 
+                #The two lines below also guard against the situation that only one cell from a sample is "indeterminate".
+                temp = data.frame(Ecnv_data_only[,sample_ident == Samples[i]]) 
+                print (paste0("Sorting sample ", Samples[i], ", which contains ", ncol(temp), " cells."))
+                colnames(temp) = colnames(Ecnv_data_only)[sample_ident == Samples[i]]
+                 
                 #temp_order stores the clustering assignments for each chromosome.
                 temp_order = list()
-                for (j in 1:length(Chrs))
-                {
-                        temp_chr = temp[Chr == Chrs[j],]
-                        
-                        #Check for bimodality, using ACR test.
-                        subclonality_check = apply(temp_chr, 2, function(x) mean(x))
-                        if(sum(subclonality_check == 0))
+                
+                #Only sort the sample if there are more than 3 cells in the sample.
+                if (ncol(temp) > 3)
+                { 
+                        for (j in 1:length(Chrs))
                         {
-                                mode_test = 1
-                        }else{ 
-                                mode_test = modetest(subclonality_check, method = "ACR")$p
-                        }
+                                temp_chr = temp[Chr == Chrs[j],]
                         
-                        #if bimodal, determine the cutoff point.
-                        if (mode_test <= 0.1)
-                        {
-                                clusters = kmeans(subclonality_check, 2)$cluster
-                                #If there is only a few cells in one of the clusters, just reset all cells to the same cluster.
-                                if ((sum(clusters == 1) < 3) | (sum(clusters == 2 ) < 3))
+                                #Check for bimodality, using ACR test.
+                                subclonality_check = apply(temp_chr, 2, function(x) mean(x))
+                                if(sum(subclonality_check == 0))
                                 {
-                                        clusters = rep(1, length(subclonality_check))   
-                                }else{
-                                        print(paste0("Found 2 subclones based on chromosome ", Chrs[j], "."))
+                                 mode_test = 1
+                                 }else{ 
+                                 mode_test = modetest(subclonality_check, method = "ACR")$p
                                 }
+                        
+                                #if bimodal, determine the cutoff point.
+                                if (mode_test <= 0.1)
+                                {
+                                        clusters = kmeans(subclonality_check, 2)$cluster
+                                        #If there is only a few cells in one of the clusters, just reset all cells to the same cluster.
+                                        if ((sum(clusters == 1) < 3) | (sum(clusters == 2 ) < 3))
+                                        {
+                                                clusters = rep(1, length(subclonality_check))   
+                                         }else{
+                                                print(paste0("Found 2 subclones based on chromosome ", Chrs[j], "."))
+                                        }
                                 
-                                temp_order[[j]] = clusters
-                        }else{
-                                clusters = rep(1, length(subclonality_check))
-                                temp_order[[j]] = clusters
+                                        temp_order[[j]] = clusters
+                                }else{
+                                        clusters = rep(1, length(subclonality_check))
+                                        temp_order[[j]] = clusters
+                                }
                         }
-                }
                 
+                        #convert the ordering to a dataframe.
+                        ordering = do.call(rbind, temp_order)
+                        rownames(ordering) = Chrs
+                        colnames(ordering) = colnames(temp_chr)
                 
-                #convert the ordering to a dataframe.
-                ordering = do.call(rbind, temp_order)
-                rownames(ordering) = Chrs
-                colnames(ordering) = colnames(temp_chr)
-                
-                #order the data for the current sample, starting from Chr1 and using successive chromosomes to break ties.
-                ordering = data.frame(t(ordering))
-                ordering = ordering[do.call(order, as.list(ordering)),]
+                        #order the data for the current sample, starting from Chr1 and using successive chromosomes to break ties.
+                        ordering = data.frame(t(ordering))
+                        ordering = ordering[do.call(order, as.list(ordering)),]
                
-                cells_order = rownames(ordering)
-                temp = temp[,cells_order]
+                        cells_order = rownames(ordering)
+                        temp = temp[,cells_order]
                 
+                }
                 Ecnv_data_out = data.frame(Ecnv_data_out, temp)
                 print(paste0("Completed sorting sample ", Samples[i], ". There are now ", ncol(Ecnv_data_out)-4, " Cells."))
                 

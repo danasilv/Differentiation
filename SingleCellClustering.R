@@ -323,7 +323,8 @@ convert.merged.file = function(data)
 #It filters the data, and centers its expression levels.
 #The function also generates two QC plots. One for the number of genes expressed, one for aggregate expression of genes.
 #The output is a list containing filtered tpm matrix ($TPM) and the sample identities of the filtered tpm matrix ($sample_ident).
-tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, Ea_cutoff = 4)
+tpm.process = function(tpm, sample_ident, plot_path = "figures/", results_path = "results/",
+                       nGene_cutoff_low = 2500, nGene_cutoff_high = 7000, Ea_cutoff = 4)
 {
         print(paste0("Before filtering, there are ", ncol(tpm), " cells."))
         #the "temp" is for the second step of filtering (aggregate gene expression levels)
@@ -334,6 +335,9 @@ tpm.process = function(tpm, sample_ident, plot_path = "figures/", nGene_cutoff_l
         
         #1. Filter cells based on the number of genes expressed.
         nGene = apply(tpm, 2, function(x) sum(x != 0))
+        
+        #write out the information on how many genes are expressed by each cell, for QC purposes. 
+        write.csv (nGene, paste0(results_path, "nGene"))
         
         nGene_mean = mean(nGene)
         print(paste0("Before filtering, the average number of genes expressed per cell is ", nGene_mean, "."))

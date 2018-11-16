@@ -76,7 +76,7 @@ load_trrust = function(trrust_path = "~/Suva Lab/Dana Project 2/RESOURCES/trrust
 load_hippie = function(hippie_path = "~/Suva Lab/Dana Project 2/RESOURCES/hippie_current.txt")
 {
         network_database = read.delim(hippie_path, header = F, stringsAsFactors = F)
-        network_database = select(network_database, V1, V3, V5)
+        network_database = dplyr::select(network_database, V1, V3, V5)
         colnames(network_database) = c("from", "to", "score")
         #remove self-interactions.
         network_database = network_database[network_database$from != network_database$to,]
@@ -454,7 +454,7 @@ project.cells = function(tpm, graph_out)
 #the starting signal and P[[n]] being the result at convergence. It's expected that the P_0 which is supplied is already
 #normalized to 1.
 
-propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-12, alpha = 0.3, verbose = TRUE)
+propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-10, alpha = 0.3, verbose = TRUE)
         #propagate with alpha = 0, 1 for p-val calculation.
         #TODO: Add a check for normalization.
         #TODO: normally would take 100s of iterations - is the network too connected?
@@ -467,12 +467,15 @@ propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-12, al
         #P_0 will be a logical vector for the geneset propagation. P_0 will be a numerical matrix
         #for the cell propagation.
         P = list()
-        P_0 = graph_out$P_0
+        P_0 = as.numeric(graph_out$P_0)
         if (is.logical(P_0)) {P[[1]] = as.numeric(P_0)
         vector = TRUE} else{
                 P[[1]] = P_0
                 vector = FALSE
         } 
+        
+        #Normalize signal to 1.
+        P_0 = P_0/sum(P_0)
         
         #Propagation. 
         #TODO. For cell propagation, each cell needs to be done separately. Otherwise some cells
@@ -485,10 +488,13 @@ propagate = function(graph_out, W, n_iter = 1000, convergence_cutoff = 1e-12, al
                 # if (vector) P[[i]] = as.vector(P[[i+1]])
                 
                 #TODO: normally would not use length.
+                #TODO. for matrices, need to check convergence of each row(cell) separately.
                 if (sum((P[[i+1]] - P[[i]])^2)/length(P[[i+1]]) <= convergence_cutoff) break
         }
         
-        #TODO: results need to be normalized after propagation, divided by sum per cell? or is this necessary?
+        #Normalize output to 1.
+        P[[i+1]] = P[[i+1]]/sum(P[[i+1]])
+        
         if (verbose) print(paste0("Completed ", length(P) - 1, " iterations."))
         return (P)
 }
@@ -515,7 +521,7 @@ network.significance = function(P, graph_out, W, pval_cutoff = 0.05,  n_permutat
                 temp_graph_out$P_0 = temp_P_0 
                 
                 #run propagation on these random genes.
-                temp_P = tail(propagate(temp_graph_out, W, verbose = FALSE), 1)
+                temp_P = tail(propagate(temp_graph_out, W, alpha = 0.6,  convergence_cutoff = 1e-6, verbose = FALSE), 1)
                 distributions[[i]] =  unlist(temp_P) 
         }
         
@@ -556,7 +562,7 @@ plot.graph = function(graph_out, P, file1 = "graph initial.pdf", file2 = "graph 
         
 {
         graph = graph_from_data_frame(graph_out$edge_weights, directed = FALSE,vertices = as.character(graph_out$gene_names))
-        layout = layout_as_tree(graph)
+        layout = layout_nicely(graph)
         
         colours = colorRampPalette(c('white', "darkgoldenrod4"))
         

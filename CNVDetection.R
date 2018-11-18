@@ -28,8 +28,8 @@ library(multimode)
 #Both of these files are for hg19. "Centromeres" was obtained from ucsc table browser,
 #"all tables" > "gap".
 
-gencode = read.table("Resources/gencode_v19_gene_pos.txt")
-centromeres = read.table("Resources/Centromeres.txt")
+#gencode = read.table("Resources/gencode_v19_gene_pos.txt")
+#centromeres = read.table("Resources/Centromeres.txt")
 
 #######################CNV detection#########################
 #Code is adapted from Chris Rodman, Summer 2018.
@@ -333,13 +333,7 @@ baseline.correction = function(Ecnv_smoothed, malignant, oligo, immune, method =
 #order all cells within each sample by the chromosomes to identify genetic subclones.
 #the output of this function is a sorted inferCNV table, which can be plotted using plot.cnv.
 #The subclone identity info is outputed in the results folder.
-<<<<<<< HEAD
 sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/", centromeres, skip_first_n_samples = 2, non_malignant.names = c("Oligodendrocyte", "Immune"))
-=======
- 
-
-sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path = "results/", centromeres)
->>>>>>> e50638e1dd11ace31412c4aa4d6f423dcb70bc46
 {
         Ecnv_data_only = Ecnv_smoothed_ref[,-c(1:4)]
         #this will be the output
@@ -379,11 +373,7 @@ sort.subclones = function(Ecnv_smoothed_ref, sample_ident, gencode, results_path
         Samples = levels(sample_ident)
         
         #Don't need to sort Oligodendrocytes or Immune Cells.
-<<<<<<< HEAD
         for (i in (skip_first_n_samples + 1):length(Samples))
-=======
-        for (i in 1:length(Samples))
->>>>>>> e50638e1dd11ace31412c4aa4d6f423dcb70bc46
         {
                 #The two lines below also guard against the situation that only one cell from a sample is "indeterminate".
                 temp = data.frame(Ecnv_data_only[,sample_ident == Samples[i]]) 
